@@ -85,7 +85,7 @@
 
     <script>
         // --- CONFIGURACIÓN ---
-        const PARTICLE_COUNT = 40000;
+        const PARTICLE_COUNT = 330000;
         const ATTRACT_RANGE = 300;
         const ATTRACT_STRENGTH = 5.0;
         const DAMPING = 0.96;
@@ -215,7 +215,7 @@
                 void main() {
                     vColor = color;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = (300.0 / -mvPosition.z); // Tamaño depende de distancia
+                    gl_PointSize = (800.0 / -mvPosition.z); // Tamaño depende de distancia
                     gl_Position = projectionMatrix * mvPosition;
                 }
             `;
@@ -328,9 +328,12 @@
                 } else {
                     // Comportamiento de seguimiento (Shield)
                     // Fuerza de resorte hacia el target
-                    const forceX = (targetPos.x - p.x) * 0.15;
-                    const forceY = (targetPos.y - p.y) * 0.15;
-                    const forceZ = (targetPos.z - p.z) * 0.15;
+                    // Aumentar velocidad drásticamente si se está cerrando (implosión)
+                    const attractStrength = (shieldState === 0) ? 0.5 : 0.15;
+                    
+                    const forceX = (targetPos.x - p.x) * attractStrength;
+                    const forceY = (targetPos.y - p.y) * attractStrength;
+                    const forceZ = (targetPos.z - p.z) * attractStrength;
                     
                     v.x += forceX; v.y += forceY; v.z += forceZ;
                     v.multiplyScalar(0.85); // Damping para estabilidad
@@ -351,7 +354,7 @@
                 const brightness = 1.0 - explosionFactor;
                 const speed = v.length() * 0.02;
                 colAttr.array[ix] = 1.0 * brightness;     
-                colAttr.array[iy] = (0.5 + speed) * brightness; 
+                colAttr.array[iy] = (0.6 + speed) * brightness; 
                 colAttr.array[iz] = (speed * 0.5) * brightness; 
             }
 
