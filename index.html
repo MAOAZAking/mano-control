@@ -206,7 +206,7 @@
                 void main() {
                     vColor = color;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = (1200.0 / -mvPosition.z); // Puntos más grandes para mejor visibilidad
+                    gl_PointSize = (4000.0 / -mvPosition.z); // Puntos MUCHO más grandes para asegurar visibilidad
                     gl_Position = projectionMatrix * mvPosition;
                 }
             `;
@@ -242,6 +242,8 @@
             const posAttr = geometry.attributes.position;
             const colAttr = geometry.attributes.color;
             const shapeIds = geometry.userData.shapeIds;
+            const positions = posAttr.array; // Usar referencia directa para asegurar actualización
+            const colors = colAttr.array;
             
             // Colores Neón
             const colorCenter = new THREE.Color(1.0, 1.0, 0.4); // Amarillo luminoso
@@ -259,7 +261,7 @@
                 // Variables temporales para posición
                 let px = 0, py = 0, pz = 0;
                 let visible = false;
-                let noise = (Math.random() - 0.5) * 5.0; // Más ruido/grosor
+                let noise = (Math.random() - 0.5) * 3.0; 
 
                 // --- LÓGICA DE FORMAS ---
                 
@@ -447,9 +449,9 @@
                     if (id === 6) alpha = animValues.outerRaysAlpha;
                     if (id === 7) alpha = animValues.finalCirclesAlpha;
 
-                    colAttr.array[ix] = c.r * alpha;
-                    colAttr.array[ix+1] = c.g * alpha;
-                    colAttr.array[ix+2] = c.b * alpha;
+                    colors[ix] = c.r * alpha;
+                    colors[ix+1] = c.g * alpha;
+                    colors[ix+2] = c.b * alpha;
                 } else {
                     // Ocultar lejos
                     positions[ix] = 9999;
