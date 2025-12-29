@@ -85,7 +85,7 @@
 
     <script>
         // --- CONFIGURACIÓN ---
-        const PARTICLE_COUNT = 999999;
+        const PARTICLE_COUNT = 200000;
         const ATTRACT_RANGE = 300;
         const ATTRACT_STRENGTH = 5.0;
         const DAMPING = 0.96;
@@ -125,6 +125,7 @@
             window.addEventListener('resize', onWindowResize);
             document.addEventListener('mousemove', onMouseMove);
             
+            
             // Iniciar Loop
             animate();
         }
@@ -137,6 +138,7 @@
             initialPositions = new Float32Array(PARTICLE_COUNT * 3);
             const colors = new Float32Array(PARTICLE_COUNT * 3);
             const types = new Float32Array(PARTICLE_COUNT); // 0: Ring, 1: Square, 2: Spark
+            const scatterDirs = new Float32Array(PARTICLE_COUNT * 3); // Direcciones de dispersión
 
             const color1 = new THREE.Color(0xffaa00); // Naranja Místico
             const color2 = new THREE.Color(0xff2200); // Rojo Fuego
@@ -202,11 +204,16 @@
                 colors[i * 3] = mixedColor.r;
                 colors[i * 3 + 1] = mixedColor.g;
                 colors[i * 3 + 2] = mixedColor.b;
+
+                // Dirección aleatoria para la invocación
+                scatterDirs[i * 3] = (Math.random() - 0.5);
+                scatterDirs[i * 3 + 1] = (Math.random() - 0.5);
+                scatterDirs[i * 3 + 2] = (Math.random() - 0.5);
             }
 
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-            geometry.userData = { types: types }; // Guardar tipos para uso en update
+            geometry.userData = { types: types, scatterDirs: scatterDirs }; // Guardar datos extra
 
             // Shader Material personalizado para mejor rendimiento y efectos visuales
             const vertexShader = `
@@ -252,17 +259,18 @@
             const posAttr = geometry.attributes.position;
             const colAttr = geometry.attributes.color;
             const types = geometry.userData.types;
+            const scatterDirs = geometry.userData.scatterDirs;
             
             // Usamos un objeto temporal para cálculos vectoriales para evitar GC
             const p = new THREE.Vector3();
             const v = new THREE.Vector3();
             const targetPos = new THREE.Vector3();
 
-            // Manejo de Explosión (Mano perdida)
+            // Manejo de Invocación / Explosión
             if (!isHandDetected) {
-                explosionFactor = Math.min(1.0, explosionFactor + 0.05);
+                explosionFactor = Math.min(1.0, explosionFactor + 0.02); // Se van dispersando
             } else {
-                explosionFactor = Math.max(0.0, explosionFactor - 0.05);
+                explosionFactor = Math.max(0.0, explosionFactor - 0.01); // Llegan poco a poco (Invocación)
             }
 
             // Rotación global del mandala
@@ -319,25 +327,27 @@
                 targetPos.set(rx, ry, oz * localScale);
                 targetPos.applyMatrix4(handMatrix);
 
+                // 2.5 Aplicar dispersión por invocación (vienen de todos lados)
+                // Usamos scatterDirs para que cada partícula tenga un origen lejano consistente
+                const scatterDist = 2000.0 * explosionFactor; // Radio de dispersión
+                targetPos.x += scatterDirs[ix] * scatterDist;
+                targetPos.y += scatterDirs[iy] * scatterDist;
+                targetPos.z += scatterDirs[iz] * scatterDist;
+
                 // 3. Física
-                if (explosionFactor > 0.1) {
-                    // Comportamiento de "Romperse" / Volar
-                    // Velocidad aleatoria hacia afuera + gravedad leve
-                    v.add(new THREE.Vector3((Math.random()-0.5)*10, (Math.random()-0.5)*10, (Math.random()-0.5)*10));
-                    v.multiplyScalar(0.95); // Fricción aire
-                } else {
-                    // Comportamiento de seguimiento (Shield)
-                    // Fuerza de resorte hacia el target
-                    // Aumentar velocidad drásticamente si se está cerrando (implosión)
-                    const attractStrength = (shieldState === 0) ? 0.5 : 0.15;
-                    
-                    const forceX = (targetPos.x - p.x) * attractStrength;
-                    const forceY = (targetPos.y - p.y) * attractStrength;
-                    const forceZ = (targetPos.z - p.z) * attractStrength;
-                    
-                    v.x += forceX; v.y += forceY; v.z += forceZ;
-                    v.multiplyScalar(0.85); // Damping para estabilidad
-                }
+                // Comportamiento de seguimiento (Shield)
+                // Fuerza de resorte hacia el target
+                // Aumentar velocidad drásticamente si se está cerrando (implosión)
+                // Si estamos en invocación (explosionFactor > 0), attractStrength puede ser menor para que lleguen suave
+                let attractStrength = (shieldState === 0) ? 0.5 : 0.15;
+                if (explosionFactor > 0) attractStrength = 0.1; // Llegada suave
+                
+                const forceX = (targetPos.x - p.x) * attractStrength;
+                const forceY = (targetPos.y - p.y) * attractStrength;
+                const forceZ = (targetPos.z - p.z) * attractStrength;
+                
+                v.x += forceX; v.y += forceY; v.z += forceZ;
+                v.multiplyScalar(0.85); // Damping para estabilidad
 
                 // Actualizar posición
                 positions[ix] += v.x;
@@ -366,6 +376,19 @@
             requestAnimationFrame(animate);
             time += 0.01;
             
+            // --- Estabilización de Cámara ---
+            if (isHandDetected) {
+                // Obtener posición actual de la mano
+                const handPos = new THREE.Vector3().setFromMatrixPosition(handMatrix);
+                // La cámara sigue suavemente a la mano en X e Y
+                camera.position.x += (handPos.x - camera.position.x) * 0.05;
+                camera.position.y += (handPos.y - camera.position.y) * 0.05;
+            } else {
+                // Volver al centro si no hay mano
+                camera.position.x += (0 - camera.position.x) * 0.05;
+                camera.position.y += (0 - camera.position.y) * 0.05;
+            }
+
             updateParticles();
             renderer.render(scene, camera);
         }
