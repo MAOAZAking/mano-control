@@ -270,7 +270,7 @@
             if (!isHandDetected) {
                 explosionFactor = Math.min(1.0, explosionFactor + 0.02); // Se van dispersando
             } else {
-                explosionFactor = Math.max(0.0, explosionFactor - 0.04); // Llegan RÁPIDO (Invocación)
+                explosionFactor = Math.max(0.0, explosionFactor - 0.06); // TIEMPO: Aumenta este número para que la animación termine antes
             }
 
             // Rotación global del mandala
@@ -339,15 +339,16 @@
                 // Fuerza de resorte hacia el target
                 // Aumentar velocidad drásticamente si se está cerrando (implosión)
                 // Si estamos en invocación (explosionFactor > 0), attractStrength puede ser menor para que lleguen suave
-                let attractStrength = (shieldState === 0) ? 0.5 : 0.25;
-                if (explosionFactor > 0) attractStrength = 0.4; // Llegada rápida
+                let attractStrength = (shieldState === 0) ? 1.0 : 0.25;
+                if (explosionFactor > 0) attractStrength = 0.6; // FUERZA: Aumenta esto para que las partículas viajen más rápido
                 
                 const forceX = (targetPos.x - p.x) * attractStrength;
                 const forceY = (targetPos.y - p.y) * attractStrength;
                 const forceZ = (targetPos.z - p.z) * attractStrength;
                 
                 v.x += forceX; v.y += forceY; v.z += forceZ;
-                v.multiplyScalar(0.85); // Damping para estabilidad
+                const damping = (shieldState === 0) ? 0.5 : 0.85; // Mayor freno en puño
+                v.multiplyScalar(damping); // Damping para estabilidad
 
                 // Actualizar posición
                 positions[ix] += v.x;
@@ -361,7 +362,18 @@
 
                 // Color dinámico basado en velocidad
                 // Si explota, se desvanece (simulado oscureciendo)
-                const brightness = 1.0 - explosionFactor;
+                let brightness = 1.0 - explosionFactor;
+
+                // En modo puño, ocultar partículas fuera del radio de 5px
+                if (shieldState === 0) {
+                    const distSq = (positions[ix] - targetPos.x)**2 + 
+                                 (positions[iy] - targetPos.y)**2 + 
+                                 (positions[iz] - targetPos.z)**2;
+                    if (distSq > 25.0) { // 5^2 = 25
+                        brightness = 0.0;
+                    }
+                }
+
                 const speed = v.length() * 0.02;
                 colAttr.array[ix] = 1.0 * brightness;     
                 colAttr.array[iy] = (0.6 + speed) * brightness; 
