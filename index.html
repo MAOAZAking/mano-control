@@ -79,8 +79,8 @@
     </div>
 
     <div class="controls">
-        Usa AMBAS MANOS para invocar.<br>
-        Junta las manos, sepáralas y gira para crear el portal.
+        CONTROL DE UNA MANO:<br>
+        1. Puño: Cerrar/Implosionar | 2. Meñique+Pulgar: Círculos | 3. Mano Abierta: Escudo Completo
     </div>
 
     <script>
@@ -93,8 +93,10 @@
         // --- VARIABLES GLOBALES ---
         let scene, camera, renderer, particles, geometry, material;
         let positions, velocities, initialPositions;
-        let hand1Pos = new THREE.Vector3(-50, 0, 0);
-        let hand2Pos = new THREE.Vector3(50, 0, 0);
+        let handMatrix = new THREE.Matrix4();
+        let handDetectedState = false; // Para manejar la transición de pérdida
+        let shieldState = 0; // 0: Implosion, 1: Circles, 2: Full
+        let explosionFactor = 0; // 0 a 1
         let isHandDetected = false;
         let time = 0;
 
@@ -134,6 +136,7 @@
             velocities = new Float32Array(PARTICLE_COUNT * 3);
             initialPositions = new Float32Array(PARTICLE_COUNT * 3);
             const colors = new Float32Array(PARTICLE_COUNT * 3);
+            const types = new Float32Array(PARTICLE_COUNT); // 0: Ring, 1: Square, 2: Spark
 
             const color1 = new THREE.Color(0xffaa00); // Naranja Místico
             const color2 = new THREE.Color(0xff2200); // Rojo Fuego
@@ -141,6 +144,7 @@
             for (let i = 0; i < PARTICLE_COUNT; i++) {
                 // Generación de Mandala / Escudo
                 let x, y, z;
+                let type = 0; // 0: Ring, 1: Square
                 const type = Math.random();
                 const theta = Math.random() * Math.PI * 2;
 
@@ -149,6 +153,7 @@
                     const r = 180 + (Math.random() - 0.5) * 10;
                     x = r * Math.cos(theta);
                     y = r * Math.sin(theta);
+                    type = 0;
                 } else if (type < 0.5) {
                     // Cuadrado Rotado (Geometría)
                     const size = 140;
@@ -159,16 +164,19 @@
                     else if (side === 1) { x = -size; y = offset; }
                     else if (side === 2) { x = offset; y = size; }
                     else { x = offset; y = -size; }
+                    type = 1;
                 } else if (type < 0.7) {
                     // Anillo Exterior
                     const r = 280 + (Math.random() - 0.5) * 4;
                     x = r * Math.cos(theta);
                     y = r * Math.sin(theta);
+                    type = 0;
                 } else {
                     // Chispas internas / Relleno
                     const r = Math.random() * 300;
                     x = r * Math.cos(theta);
                     y = r * Math.sin(theta);
+                    type = 2;
                 }
                 
                 z = (Math.random() - 0.5) * 10; // Plano 2D (disco)
@@ -184,6 +192,10 @@
                 velocities[i * 3] = 0;
                 velocities[i * 3 + 1] = 0;
                 velocities[i * 3 + 2] = 0;
+                
+                // Guardamos el tipo en el canal alpha del color temporalmente o en un atributo nuevo
+                // Para simplificar, usaremos el array 'types' en JS, no en shader por ahora
+                types[i] = type;
 
                 // Mezcla de colores ardientes
                 const mixedColor = color1.clone().lerp(color2, Math.random());
@@ -194,6 +206,7 @@
 
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.userData = { types: types }; // Guardar tipos para uso en update
 
             // Shader Material personalizado para mejor rendimiento y efectos visuales
             const vertexShader = `
@@ -238,23 +251,19 @@
         function updateParticles() {
             const posAttr = geometry.attributes.position;
             const colAttr = geometry.attributes.color;
+            const types = geometry.userData.types;
             
             // Usamos un objeto temporal para cálculos vectoriales para evitar GC
             const p = new THREE.Vector3();
             const v = new THREE.Vector3();
-            
-            // Calcular base del sistema de coordenadas basado en las dos manos
-            const center = new THREE.Vector3().addVectors(hand1Pos, hand2Pos).multiplyScalar(0.5);
-            const diff = new THREE.Vector3().subVectors(hand2Pos, hand1Pos);
-            const distance = diff.length();
-            
-            // Eje X local alineado con las manos (Vector Director)
-            const axisX = diff.clone().normalize();
-            // Eje Y local perpendicular (en 2D plano XY)
-            const axisY = new THREE.Vector3(-axisX.y, axisX.x, 0);
-            
-            // Escala basada en la distancia (con un factor para que ajuste bien al tamaño de manos)
-            const scale = Math.max(0.01, distance / 350.0); 
+            const targetPos = new THREE.Vector3();
+
+            // Manejo de Explosión (Mano perdida)
+            if (!isHandDetected) {
+                explosionFactor = Math.min(1.0, explosionFactor + 0.05);
+            } else {
+                explosionFactor = Math.max(0.0, explosionFactor - 0.05);
+            }
 
             // Rotación global del mandala
             const angle = time * 1.5; 
@@ -274,35 +283,58 @@
                 p.set(positions[ix], positions[iy], positions[iz]);
                 v.set(velocities[ix], velocities[iy], velocities[iz]);
 
-                // Posición original en el espacio local del mandala
+                // Posición original local
                 const ox = initialPositions[ix];
                 const oy = initialPositions[iy];
                 const oz = initialPositions[iz];
+                const type = types[i];
                 
-                // 1. Aplicar animación de rotación interna (giro del mandala)
+                // 1. Calcular posición objetivo local basada en el estado del escudo
                 let rx, ry;
-                const distSq = ox*ox + oy*oy;
-                if (distSq < 160*160 && distSq > 120*120) {
+                
+                // Si es cuadrado (type 1) y estamos en estado FULL, rota inverso
+                // Si no estamos en estado FULL, el cuadrado se esconde (escala 0)
+                let localScale = 1.0;
+
+                if (shieldState === 0) { // Implosión / Puño cerrado
+                    localScale = 0.0;
+                } else if (shieldState === 1) { // Círculos (Shaka)
+                    if (type === 1) localScale = 0.0; // Ocultar cuadrado
+                }
+                // Estado 2 (Full) muestra todo
+
+                if (type === 1) {
                     rx = ox * cosB - oy * sinB;
                     ry = ox * sinB + oy * cosB;
                 } else {
                     rx = ox * cosA - oy * sinA;
                     ry = ox * sinA + oy * cosA;
                 }
+                
+                // Aplicar escala de estado (aparecer/desaparecer)
+                rx *= localScale;
+                ry *= localScale;
 
-                // 2. Transformar al espacio de mundo definido por las manos
-                // Pos = Center + (RotatedX * AxisX * Scale) + (RotatedY * AxisY * Scale)
-                const destX = center.x + (rx * axisX.x + ry * axisY.x) * scale;
-                const destY = center.y + (rx * axisX.y + ry * axisY.y) * scale;
-                const destZ = center.z + oz * scale;
+                // 2. Transformar posición local a Espacio Mundial usando la Matriz de la Mano
+                targetPos.set(rx, ry, oz * localScale);
+                targetPos.applyMatrix4(handMatrix);
 
-                // Física de resorte: Mover hacia la posición rotada
-                v.x += (destX - p.x) * 0.1;
-                v.y += (destY - p.y) * 0.1;
-                v.z += (destZ - p.z) * 0.1;
-
-                // Fricción (Damping) para crear efecto de arrastre
-                v.multiplyScalar(0.80);
+                // 3. Física
+                if (explosionFactor > 0.1) {
+                    // Comportamiento de "Romperse" / Volar
+                    // Velocidad aleatoria hacia afuera + gravedad leve
+                    v.add(new THREE.Vector3((Math.random()-0.5)*10, (Math.random()-0.5)*10, (Math.random()-0.5)*10));
+                    v.multiplyScalar(0.95); // Fricción aire
+                } else {
+                    // Comportamiento de seguimiento (Shield)
+                    // Fuerza de resorte hacia el target
+                    const forceX = (targetPos.x - p.x) * 0.15;
+                    const forceY = (targetPos.y - p.y) * 0.15;
+                    const forceZ = (targetPos.z - p.z) * 0.15;
+                    
+                    v.x += forceX; v.y += forceY; v.z += forceZ;
+                    v.multiplyScalar(0.85); // Damping para estabilidad
+                }
 
                 // Actualizar posición
                 positions[ix] += v.x;
@@ -315,11 +347,12 @@
                 velocities[iz] = v.z;
 
                 // Color dinámico basado en velocidad
+                // Si explota, se desvanece (simulado oscureciendo)
+                const brightness = 1.0 - explosionFactor;
                 const speed = v.length() * 0.02;
-                // Hacer que brille más al moverse
-                colAttr.array[ix] = 1.0;     // R (Siempre alto para naranja)
-                colAttr.array[iy] = 0.5 + speed; // G (Sube a amarillo)
-                colAttr.array[iz] = speed * 0.5; // B (Sube a blanco)
+                colAttr.array[ix] = 1.0 * brightness;     
+                colAttr.array[iy] = (0.5 + speed) * brightness; 
+                colAttr.array[iz] = (speed * 0.5) * brightness; 
             }
 
             posAttr.needsUpdate = true;
@@ -339,36 +372,72 @@
             loadingEl.style.display = 'none';
             videoContainer.style.display = 'block';
 
-            const handsDetected = results.multiHandLandmarks.length;
-
-            if (handsDetected > 0) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 isHandDetected = true;
+                const landmarks = results.multiHandLandmarks[0];
                 
-                // Helper para convertir coordenadas
-                const getHandPos = (landmarks) => {
-                    const index = landmarks[8];
-                    return new THREE.Vector3(
-                        (0.5 - index.x) * window.innerWidth,
-                        (0.5 - index.y) * window.innerHeight,
-                        -index.z * 500
-                    );
+                // --- 1. Calcular Orientación de la Mano ---
+                // Puntos clave: 0 (Muñeca), 5 (Índice MCP), 17 (Meñique MCP)
+                const wrist = new THREE.Vector3(
+                    (0.5 - landmarks[0].x) * window.innerWidth,
+                    (0.5 - landmarks[0].y) * window.innerHeight,
+                    -landmarks[0].z * 500
+                );
+                
+                const indexMCP = new THREE.Vector3(
+                    (0.5 - landmarks[5].x) * window.innerWidth,
+                    (0.5 - landmarks[5].y) * window.innerHeight,
+                    -landmarks[5].z * 500
+                );
+
+                const pinkyMCP = new THREE.Vector3(
+                    (0.5 - landmarks[17].x) * window.innerWidth,
+                    (0.5 - landmarks[17].y) * window.innerHeight,
+                    -landmarks[17].z * 500
+                );
+
+                // Calcular vectores base
+                // Eje Y (Arriba de la mano): De muñeca a centro de dedos (aprox)
+                const yAxis = new THREE.Vector3().subVectors(indexMCP, wrist).normalize();
+                // Vector auxiliar para cruzar
+                const vAux = new THREE.Vector3().subVectors(pinkyMCP, wrist).normalize();
+                // Eje Z (Normal de la palma): Cruz entre Índice y Meñique
+                const zAxis = new THREE.Vector3().crossVectors(yAxis, vAux).normalize();
+                // Eje X (Derecha de la mano): Cruz entre Y y Z
+                const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
+
+                // Crear matriz de rotación y posición
+                handMatrix.makeBasis(xAxis, yAxis, zAxis);
+                handMatrix.setPosition(wrist); // El escudo sale de la muñeca/palma
+
+                // --- 2. Detección de Gestos ---
+                // Distancia de puntas de dedos a muñeca vs MCP a muñeca
+                const isFingerOpen = (tipIdx, mcpIdx) => {
+                    const dTip = Math.hypot(landmarks[tipIdx].x - landmarks[0].x, landmarks[tipIdx].y - landmarks[0].y);
+                    const dMcp = Math.hypot(landmarks[mcpIdx].x - landmarks[0].x, landmarks[mcpIdx].y - landmarks[0].y);
+                    return dTip > dMcp * 1.2; // Umbral simple
                 };
 
-                let p1, p2;
+                const thumbOpen = isFingerOpen(4, 2); // Pulgar
+                const indexOpen = isFingerOpen(8, 5);
+                const middleOpen = isFingerOpen(12, 9);
+                const ringOpen = isFingerOpen(16, 13);
+                const pinkyOpen = isFingerOpen(20, 17); // Meñique
 
-                if (handsDetected >= 2) {
-                    // Dos manos: Control total
-                    p1 = getHandPos(results.multiHandLandmarks[0]);
-                    p2 = getHandPos(results.multiHandLandmarks[1]);
+                // Lógica de Estados
+                if (!indexOpen && !middleOpen && !ringOpen && !pinkyOpen) {
+                    // Puño (Casi todo cerrado) -> Implosión
+                    shieldState = 0;
+                } else if (thumbOpen && pinkyOpen && !middleOpen && !ringOpen) {
+                    // Shaka (Pulgar + Meñique) -> Círculos
+                    shieldState = 1;
+                } else if (indexOpen && middleOpen && ringOpen) {
+                    // Mano Abierta -> Full
+                    shieldState = 2;
                 } else {
-                    // Una mano: Modo espejo (Simula la segunda mano opuesta al centro)
-                    p1 = getHandPos(results.multiHandLandmarks[0]);
-                    p2 = p1.clone().multiplyScalar(-1); 
+                    // Estado intermedio, mantener anterior o ir a círculos
+                    if (shieldState === 0) shieldState = 1; 
                 }
-                
-                // Suavizado (Lerp) para movimiento fluido
-                hand1Pos.lerp(p1, 0.2);
-                hand2Pos.lerp(p2, 0.2);
 
             } else {
                 isHandDetected = false;
@@ -380,7 +449,7 @@
         }});
 
         hands.setOptions({
-            maxNumHands: 2,
+            maxNumHands: 1,
             modelComplexity: 1,
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
