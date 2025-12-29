@@ -86,7 +86,7 @@
 
     <script>
         // --- CONFIGURACIÓN ---
-        const PARTICLE_COUNT = 80000; // Optimizado para formas paramétricas
+        const PARTICLE_COUNT = 90000; // Aumentado para mayor densidad
         
         // --- VARIABLES GLOBALES ---
         let scene, camera, renderer, particles, geometry, material;
@@ -107,7 +107,7 @@
         // Variables de Animación (Valores actuales interpolados)
         let animValues = {
             staffHeight: 0,      // Altura de la vara central
-            staffAngle: 0,       // Rotación de la vara
+            staffAngle: 0,       // Rotación de la vara (0 = Vertical)
             circleProgress: 0,   // Cuánto del círculo se ha dibujado (0 a PI*2)
             innerRectAlpha: 0,   // Opacidad de rectángulos internos
             squareWidth: 0,      // Ancho del cuadrado (expansion horizontal)
@@ -133,7 +133,7 @@
         // --- INICIALIZACIÓN THREE.JS ---
         function initThree() {
             scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0x050505, 0.002);
+            scene.fog = new THREE.FogExp2(0x050505, 0.0002); // Niebla mínima para máxima visibilidad
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 3000);
             camera.position.z = 600;
@@ -141,6 +141,7 @@
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.lookAt(0, 0, 0); // Forzar a la cámara a mirar al centro exacto (0,0,0)
             document.body.appendChild(renderer.domElement);
 
             // Crear Partículas
@@ -168,6 +169,9 @@
             // 5: Cuadrado Rotado
             // 6: Rayos Externos
             // 7: Círculos Finales
+            // 8: Marcador Mano Izquierda
+            // 9: Marcador Mano Derecha
+            // 10: Núcleo Central (Debug/Referencia)
             const shapeIds = new Float32Array(PARTICLE_COUNT);
             
             // Distribución de partículas
@@ -186,7 +190,7 @@
                 }
             };
 
-            assignRange(5000, 0);  // Vara
+            assignRange(8000, 0);  // Vara (Más densa)
             assignRange(10000, 1); // Círculo Interno
             assignRange(15000, 2); // Círculo Externo
             assignRange(10000, 3); // Rectángulos Internos
@@ -194,9 +198,12 @@
             assignRange(10000, 5); // Cuadrado Rotado
             assignRange(10000, 6); // Rayos Externos
             assignRange(10000, 7); // Círculos Finales
+            assignRange(2500, 8);  // Marcador Mano 1
+            assignRange(2500, 9);  // Marcador Mano 2
+            assignRange(1000, 10); // Núcleo Central
 
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
             geometry.userData = { shapeIds: shapeIds };
 
             // Shader Material personalizado para mejor rendimiento y efectos visuales
@@ -206,7 +213,7 @@
                 void main() {
                     vColor = color;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = (4000.0 / -mvPosition.z); // Puntos MUCHO más grandes para asegurar visibilidad
+                    gl_PointSize = (8000.0 / -mvPosition.z); // Puntos gigantes para que la vara se vea sólida
                     gl_Position = projectionMatrix * mvPosition;
                 }
             `;
@@ -248,6 +255,7 @@
             // Colores Neón
             const colorCenter = new THREE.Color(1.0, 1.0, 0.4); // Amarillo luminoso
             const colorEdge = new THREE.Color(1.0, 0.2, 0.0);   // Naranja/Rojo
+            const colorHand = new THREE.Color(0.0, 1.0, 1.0);   // Cyan para las manos (diferente al hechizo)
             
             // Constantes de dimensiones
             const INNER_RADIUS = 180;
@@ -261,7 +269,8 @@
                 // Variables temporales para posición
                 let px = 0, py = 0, pz = 0;
                 let visible = false;
-                let noise = (Math.random() - 0.5) * 3.0; 
+                let noise = (Math.random() - 0.5) * 5.0; 
+                let isHandMarker = false;
 
                 // --- LÓGICA DE FORMAS ---
                 
@@ -269,13 +278,13 @@
                 if (id === 0) {
                     if (animValues.staffHeight > 1) {
                         visible = true;
-                        // Distribuir a lo largo de la altura (-h a +h)
+                        // Distribuir a lo largo de la altura (-h/2 a +h/2)
                         const h = animValues.staffHeight;
-                        const t = (i % 5000) / 5000.0; // 0 a 1
-                        const yLocal = (t - 0.5) * 2.0 * h;
+                        const t = (i % 8000) / 8000.0; // 0 a 1
+                        const yLocal = (t - 0.5) * h; // Centrado verticalmente en 0 (mitad de pantalla)
                         
                         // Añadir grosor a la vara
-                        const thickness = 8.0; 
+                        const thickness = 25.0; // Vara muy gruesa para que sea imposible no verla
                         const xLocal = (Math.random() - 0.5) * thickness;
 
                         // Rotar la vara según staffAngle
@@ -296,15 +305,13 @@
                     const angle = t * Math.PI * 2; // 0 a 360
                     
                     // Solo dibujar si el ángulo está dentro del progreso actual de rotación
-                    // El progreso va de 0 a PI (180 grados), pero queremos dibujar el círculo completo (2 PI)
-                    // Mapeamos: Si staffAngle va de 0 a PI, dibujamos de 0 a PI y de PI a 2PI simultáneamente (simetría)
-                    // O mejor: El rastro se deja donde pasó la vara.
+                    // Lógica de rastro simplificada:
+                    // La vara empieza en 0 (vertical). Gira hasta PI (invertido).
+                    // Mostramos el arco desde 0 hasta el ángulo actual (y su espejo)
                     
-                    // Lógica de rastro: La vara gira de 0 a PI.
-                    // El rastro debe aparecer en el ángulo actual y su opuesto.
-                    
-                    // Normalizar staffAngle para que sea positivo y continuo
-                    let currentRot = animValues.staffAngle;
+                    let currentRot = Math.abs(animValues.staffAngle);
+                    // Normalizar para comparación (0 a PI)
+                    if (currentRot > Math.PI) currentRot -= Math.PI;
                     
                     // Si ya completamos el paso 3, mostramos todo el círculo
                     if (currentStep > 3) {
@@ -312,11 +319,17 @@
                     } else if (currentStep === 3) {
                         // Durante la rotación, mostrar si el ángulo de la partícula es menor al ángulo actual
                         // Ajustamos para que dibuje en ambos lados (simetría central)
-                        let particleAngle = angle;
-                        if (particleAngle > Math.PI) particleAngle -= Math.PI;
+                        // Mapear ángulo de partícula a 0-PI (simetría)
+                        let pAngle = angle % Math.PI; // 0 a PI
                         
-                        // Un pequeño margen para que no desaparezca instantáneamente
-                        if (particleAngle < currentRot + 0.1) visible = true;
+                        // Ajuste de fase: La vara empieza vertical (PI/2 en coordenadas polares estándar)
+                        // Pero nuestro staffAngle es 0 para vertical.
+                        // Simplificación visual: Mostrar todo lo que esté "detrás" del barrido
+                        // Barrido visual aproximado:
+                        if (animValues.circleProgress > 0.1) {
+                             // Mostrar aleatoriamente para efecto de construcción
+                             if (Math.random() < animValues.circleProgress) visible = true;
+                        }
                     }
 
                     if (visible) {
@@ -432,6 +445,36 @@
                     }
                 }
 
+                // 8 & 9: MARCADORES DE MANOS (Siempre visibles si hay detección)
+                else if (id === 8 || id === 9) {
+                    if (isHandDetected) {
+                        visible = true;
+                        isHandMarker = true;
+                        const target = (id === 8) ? hand1 : hand2;
+                        
+                        // Esfera de energía alrededor de la mano
+                        const r = 20 * Math.random(); // Radio de la energía de la mano
+                        const theta = Math.random() * Math.PI * 2;
+                        const phi = Math.random() * Math.PI;
+                        
+                        px = target.x + r * Math.sin(phi) * Math.cos(theta);
+                        py = target.y + r * Math.sin(phi) * Math.sin(theta);
+                        pz = target.z + r * Math.cos(phi);
+                    }
+                }
+
+                // 10: NÚCLEO CENTRAL (Siempre visible para referencia)
+                else if (id === 10) {
+                    visible = true;
+                    // Latido en el centro (0,0) para marcar el origen exacto
+                    const pulse = 1.0 + Math.sin(time * 8.0) * 0.3;
+                    const r = 20 * Math.random() * pulse;
+                    const theta = Math.random() * Math.PI * 2;
+                    px = r * Math.cos(theta);
+                    py = r * Math.sin(theta);
+                    pz = (Math.random() - 0.5) * 5;
+                }
+
                 // --- APLICAR POSICIÓN Y COLOR ---
                 if (visible) {
                     positions[ix] = px;
@@ -441,7 +484,12 @@
                     // Color basado en distancia al centro (Amarillo -> Rojo)
                     const dist = Math.sqrt(px*px + py*py);
                     const tColor = Math.min(1.0, dist / 350.0);
-                    const c = colorCenter.clone().lerp(colorEdge, tColor);
+                    let c;
+                    if (isHandMarker) {
+                        c = colorHand;
+                    } else {
+                        c = colorCenter.clone().lerp(colorEdge, tColor);
+                    }
                     
                     // Alpha global por grupo
                     let alpha = 1.0;
@@ -493,7 +541,7 @@
             // STEP 0: PRAYER (Manos juntas)
             if (currentStep === 0) {
                 msg = "1) Junta las manos (🙏)";
-                if (dist < 120) { // Umbral más tolerante
+                if (dist < 180) { // Muy tolerante
                     currentStep = 1;
                 }
             }
@@ -503,11 +551,12 @@
                 msg = "2) Separa una mano arriba y otra abajo";
                 // Mapear distancia vertical a altura de vara
                 // Max height deseada ~300
-                let targetH = Math.min(350, dy * 1.5); // Factor aumentado para que crezca más rápido
+                let targetH = Math.min(600, dy * 2.5); // Altura máxima aumentada (600 = pantalla completa vert)
                 animValues.staffHeight += (targetH - animValues.staffHeight) * 0.1;
 
-                if (animValues.staffHeight > 200) { // Umbral reducido para facilitar avance
+                if (animValues.staffHeight > 250) { 
                     currentStep = 2;
+                    animValues.staffHeight = 600; // Fijar altura máxima para que no se encoja
                 }
             }
 
@@ -528,42 +577,30 @@
                 // Normalizamos el ángulo para que vaya de 0 a PI
                 
                 let rot = Math.abs(angle); // Simplificación
-                // Queremos mapear el movimiento de manos a 0 -> PI
-                // Si las manos están verticales, angle es PI/2. Si se invierten, es -PI/2.
-                // Usaremos un acumulador simple basado en el cambio de ángulo frame a frame no es robusto.
-                // Mejor: Mapear directamente el ángulo actual.
                 
-                // Truco: Usar el tiempo o forzar la animación si detectamos movimiento
-                // Para hacerlo robusto: La vara sigue el ángulo de las manos
-                animValues.staffAngle = angle + Math.PI/2; // Ajuste para que 0 sea vertical
+                // La vara sigue el ángulo de las manos
+                // angle es atan2(dy, dx). Vertical es +/- PI/2.
+                // Queremos que staffAngle 0 sea Vertical.
+                // Entonces staffAngle = angle - PI/2 (o + PI/2 dependiendo de orientación)
+                animValues.staffAngle = angle - Math.PI/2; 
+                
+                // Progreso del círculo basado en cuánto hemos girado desde la vertical
+                // Vertical = PI/2 (angle). Si giramos a Horizontal (0), diferencia es PI/2.
+                let deviation = Math.abs(Math.abs(angle) - Math.PI/2);
+                animValues.circleProgress = Math.min(1.0, deviation / (Math.PI/2)); // 0 a 1
                 
                 // Detectar si ha girado cerca de 180 (PI)
-                if (Math.abs(animValues.staffAngle) > 2.8 || Math.abs(animValues.staffAngle) < 0.3) {
-                     // Ha dado la vuelta (vertical invertida)
-                     // Nota: Esto es simplificado, depende de qué mano está arriba
-                }
-                
-                // Para simplificar la UX: Si está en este paso, permitimos que la rotación visual siga a las manos
-                // Y si las manos vuelven a estar verticales (pero invertidas), pasamos
-                // Detectamos "Invertido": Antes Hand1 estaba arriba, ahora Hand1 está abajo
-                // O simplemente detectamos que han pasado por la horizontal
-                
-                if (Math.abs(dx) > dy && dy < 50) {
-                    // Están horizontales (mitad de camino)
-                }
-                
                 // Condición de salida: Volver a estar vertical (dy alto, dx bajo)
-                // Y asumimos que el usuario completó el giro
-                if (dy > 200 && dx < 100 && Math.abs(animValues.staffAngle) > 0.5) {
+                // Y que haya pasado por la horizontal (circleProgress alto)
+                if (dy > 150 && dx < 100 && animValues.circleProgress > 0.8) {
                      currentStep = 4;
+                     animValues.staffAngle = 0; // Resetear a vertical perfecta
                 }
             }
 
             // STEP 4: REGRESAR AL CENTRO (Rectángulos)
             else if (currentStep === 4) {
                 msg = "4) Junta las manos al centro de nuevo";
-                // Vara vuelve a vertical perfecta
-                animValues.staffAngle *= 0.9; 
                 
                 // Rectángulos aparecen mientras manos se acercan
                 // Distancia va de 300 a 0. Alpha va de 0 a 1.
@@ -709,12 +746,33 @@
             height: 480
         });
         
-        // Iniciar cámara con manejo de errores
-        cameraUtils.start().catch(err => {
-            console.error("Error al iniciar cámara:", err);
-            loadingEl.innerHTML = "Error: No se pudo acceder a la cámara.<br>Usa el mouse para interactuar.";
-            setTimeout(() => { loadingEl.style.display = 'none'; }, 3000);
-        });
+        // Función para solicitar permiso de cámara explícitamente (Estilo Meet)
+        async function requestCameraAccess() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                loadingEl.innerHTML = "Error: Tu navegador no soporta acceso a la cámara.";
+                return;
+            }
+
+            try {
+                // 1. Solicitar permiso explícitamente al navegador
+                // Esto hará aparecer el popup nativo de "Permitir cámara"
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                
+                // 2. Si el usuario acepta, detenemos este stream temporal (MediaPipe usará el suyo)
+                stream.getTracks().forEach(track => track.stop());
+                
+                // 3. Iniciamos la librería de MediaPipe
+                await cameraUtils.start();
+            } catch (err) {
+                console.error("Permiso denegado:", err);
+                loadingEl.innerHTML = "⚠️ <strong>Permiso requerido</strong><br>Por favor permite el acceso a la cámara en la barra de dirección y recarga la página.";
+                loadingEl.style.color = "#ff5555";
+                loadingEl.style.borderColor = "#ff5555";
+            }
+        }
+
+        // Iniciar solicitud
+        requestCameraAccess();
 
         function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
