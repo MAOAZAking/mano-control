@@ -545,12 +545,44 @@
             height: 480
         });
         
-        // Iniciar cámara con manejo de errores
-        cameraUtils.start().catch(err => {
-            console.error("Error al iniciar cámara:", err);
-            loadingEl.innerHTML = "Error: No se pudo acceder a la cámara.<br>Usa el mouse para interactuar.";
-            setTimeout(() => { loadingEl.style.display = 'none'; }, 3000);
-        });
+        // Función para solicitar permiso de cámara explícitamente (Estilo Meet)
+        async function requestCameraAccess() {
+            // VERIFICACIÓN DE SEGURIDAD:
+            // Los navegadores bloquean la cámara en conexiones "No Seguras" (http://IP o file://)
+            const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            const isHttps = window.location.protocol === 'https:';
+            
+            if (!isLocal && !isHttps) {
+                loadingEl.innerHTML = "⚠️ <strong>BLOQUEO DE SEGURIDAD</strong><br>El navegador desactiva la cámara en conexiones no seguras.<br><strong>Solución:</strong> Sube este archivo a GitHub Pages o Netlify (HTTPS).";
+                loadingEl.style.color = "#ff5555";
+                loadingEl.style.borderColor = "#ff5555";
+                return;
+            }
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                loadingEl.innerHTML = "Error: Tu navegador no soporta acceso a la cámara.";
+                return;
+            }
+
+            try {
+                // 1. Solicitar permiso explícitamente al navegador
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                
+                // 2. Si el usuario acepta, detenemos este stream temporal
+                stream.getTracks().forEach(track => track.stop());
+                
+                // 3. Iniciamos la librería de MediaPipe
+                await cameraUtils.start();
+            } catch (err) {
+                console.error("Permiso denegado:", err);
+                loadingEl.innerHTML = "⚠️ <strong>Permiso requerido</strong><br>Por favor permite el acceso a la cámara en la barra de dirección y recarga la página.";
+                loadingEl.style.color = "#ff5555";
+                loadingEl.style.borderColor = "#ff5555";
+            }
+        }
+
+        // Iniciar solicitud
+        requestCameraAccess();
 
         // --- INTERACCIÓN MOUSE (FALLBACK) ---
         function onMouseMove(event) {

@@ -113,7 +113,8 @@
             squareWidth: 0,      // Ancho del cuadrado (expansion horizontal)
             outerRaysAlpha: 0,   // Opacidad de rayos externos
             squareRotation: 0,   // Rotación del segundo cuadrado
-            finalCirclesAlpha: 0 // Opacidad de los 4 círculos finales
+            finalCirclesAlpha: 0, // Opacidad de los 4 círculos finales
+            rotationCheckpoint: 0 // Checkpoint para saber si ya pasamos por la horizontal
         };
 
         // Datos de manos
@@ -571,30 +572,38 @@
 
             // STEP 3: ROTACIÓN (Crear Círculos)
             else if (currentStep === 3) {
-                msg = "Girando... mantén el pellizco";
-                // Calcular rotación relativa a la vertical
-                // Asumimos que empieza vertical (PI/2 o -PI/2) y va a invertirse
-                // Normalizamos el ángulo para que vaya de 0 a PI
+                msg = "Gira las manos 180° (como las agujas del reloj)";
                 
-                let rot = Math.abs(angle); // Simplificación
+                // 1. Calcular qué tan 'Horizontal' están las manos (0 = Vertical, 1 = Horizontal)
+                // angle va de -PI a PI. Vertical es +/- PI/2. Horizontal es 0 o +/- PI.
+                let absAngle = Math.abs(angle);
+                // Distancia angular a la horizontal más cercana (0 o PI)
+                let distToHorizontal = Math.min(absAngle, Math.abs(absAngle - Math.PI));
+                // Normalizar: 0 rads dist = 1.0 horizontalness. PI/2 rads dist = 0.0 horizontalness.
+                let horizontalness = 1.0 - (distToHorizontal / (Math.PI / 2));
+                horizontalness = Math.max(0, Math.min(1, horizontalness)); // Limitar entre 0 y 1
                 
-                // La vara sigue el ángulo de las manos
-                // angle es atan2(dy, dx). Vertical es +/- PI/2.
-                // Queremos que staffAngle 0 sea Vertical.
-                // Entonces staffAngle = angle - PI/2 (o + PI/2 dependiendo de orientación)
+                // 2. Actualizar ángulo visual de la vara
                 animValues.staffAngle = angle - Math.PI/2; 
                 
-                // Progreso del círculo basado en cuánto hemos girado desde la vertical
-                // Vertical = PI/2 (angle). Si giramos a Horizontal (0), diferencia es PI/2.
-                let deviation = Math.abs(Math.abs(angle) - Math.PI/2);
-                animValues.circleProgress = Math.min(1.0, deviation / (Math.PI/2)); // 0 a 1
-                
-                // Detectar si ha girado cerca de 180 (PI)
-                // Condición de salida: Volver a estar vertical (dy alto, dx bajo)
-                // Y que haya pasado por la horizontal (circleProgress alto)
-                if (dy > 150 && dx < 100 && animValues.circleProgress > 0.8) {
-                     currentStep = 4;
-                     animValues.staffAngle = 0; // Resetear a vertical perfecta
+                // 3. Lógica de Progreso con Checkpoint (Fases)
+                // Fase A: Yendo de Vertical a Horizontal (0% a 50%)
+                if (animValues.rotationCheckpoint === 0) {
+                    animValues.circleProgress = horizontalness * 0.5;
+                    // Si llegamos a estar muy horizontales, marcamos el hito
+                    if (horizontalness > 0.80) animValues.rotationCheckpoint = 1;
+                } 
+                // Fase B: Yendo de Horizontal a Vertical Invertida (50% a 100%)
+                else {
+                    // Ahora, mientras MENOS horizontales seamos (más verticales), MÁS avanza el progreso
+                    animValues.circleProgress = 0.5 + (1.0 - horizontalness) * 0.5;
+
+                    // Condición de salida: Hemos vuelto a estar verticales
+                    if (horizontalness < 0.3) {
+                        currentStep = 4;
+                        animValues.circleProgress = 1.0; // Asegurar círculo completo
+                        animValues.staffAngle = 0; // Estabilizar vara
+                    }
                 }
             }
 
