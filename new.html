@@ -56,6 +56,7 @@
             padding: 10px;
             border-radius: 5px;
             font-size: 12px;
+            max-width: 300px;
         }
     </style>
     
@@ -79,34 +80,61 @@
     </div>
 
     <div class="controls">
-        Usa AMBAS MANOS para invocar.<br>
-        Junta las manos, sepáralas y gira para crear el portal.
+        <div id="instruction">Esperando manos...</div>
+        <small id="debug-info"></small>
     </div>
 
     <script>
         // --- CONFIGURACIÓN ---
-        const PARTICLE_COUNT = 40000;
-        const ATTRACT_RANGE = 300;
-        const ATTRACT_STRENGTH = 5.0;
-        const DAMPING = 0.96;
+        const PARTICLE_COUNT = 90000; // Aumentado para mayor densidad
         
         // --- VARIABLES GLOBALES ---
         let scene, camera, renderer, particles, geometry, material;
         let positions, velocities, initialPositions;
-        let hand1Pos = new THREE.Vector3(-50, 0, 0);
-        let hand2Pos = new THREE.Vector3(50, 0, 0);
+        
+        // Variables de Estado del Hechizo
+        let currentStep = 0; 
+        // 0: Esperando manos juntas (Prayer)
+        // 1: Separando verticalmente (Creando Vara)
+        // 2: Vara lista, esperando Pinch para rotar
+            // 3: Rotando (Creando Círculos)
+        // 4: Regresando al centro (Creando Rectángulos internos)
+        // 5: Separando horizontalmente (Creando Cuadrado y Rayos)
+        // 6: Cuadrado listo, esperando rotación de manos
+        // 7: Rotando cuadrado (Estrella final y círculos pequeños)
+        // 8: Completo
+
+        // Variables de Animación (Valores actuales interpolados)
+        let animValues = {
+            staffHeight: 0,      // Altura de la vara central
+            staffAngle: 0,       // Rotación de la vara (0 = Vertical)
+            circleProgress: 0,   // Cuánto del círculo se ha dibujado (0 a PI*2)
+            innerRectAlpha: 0,   // Opacidad de rectángulos internos
+            squareWidth: 0,      // Ancho del cuadrado (expansion horizontal)
+            outerRaysAlpha: 0,   // Opacidad de rayos externos
+            squareRotation: 0,   // Rotación del segundo cuadrado
+            finalCirclesAlpha: 0, // Opacidad de los 4 círculos finales
+            startAngle: 0        // Ángulo inicial al comenzar la rotación
+        };
+
+        // Datos de manos
+        let hand1 = new THREE.Vector3(0,0,0); // Izquierda (visual)
+        let hand2 = new THREE.Vector3(0,0,0); // Derecha (visual)
         let isHandDetected = false;
+        let isPinching = false;
         let time = 0;
 
         // Elementos DOM
         const loadingEl = document.getElementById('loading');
         const videoElement = document.getElementsByClassName('input_video')[0];
         const videoContainer = document.getElementById('video-container');
+        const instructionEl = document.getElementById('instruction');
+        const debugEl = document.getElementById('debug-info');
 
         // --- INICIALIZACIÓN THREE.JS ---
         function initThree() {
             scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0x050505, 0.002);
+            scene.fog = new THREE.FogExp2(0x050505, 0.0002); // Niebla mínima para máxima visibilidad
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 3000);
             camera.position.z = 600;
@@ -114,6 +142,7 @@
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.lookAt(0, 0, 0); // Forzar a la cámara a mirar al centro exacto (0,0,0)
             document.body.appendChild(renderer.domElement);
 
             // Crear Partículas
@@ -121,7 +150,6 @@
 
             // Eventos
             window.addEventListener('resize', onWindowResize);
-            document.addEventListener('mousemove', onMouseMove);
             
             // Iniciar Loop
             animate();
@@ -131,69 +159,53 @@
         function createParticles() {
             geometry = new THREE.BufferGeometry();
             positions = new Float32Array(PARTICLE_COUNT * 3);
-            velocities = new Float32Array(PARTICLE_COUNT * 3);
-            initialPositions = new Float32Array(PARTICLE_COUNT * 3);
             const colors = new Float32Array(PARTICLE_COUNT * 3);
-
-            const color1 = new THREE.Color(0xffaa00); // Naranja Místico
-            const color2 = new THREE.Color(0xff2200); // Rojo Fuego
-
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                // Generación de Mandala / Escudo
-                let x, y, z;
-                const type = Math.random();
-                const theta = Math.random() * Math.PI * 2;
-
-                if (type < 0.3) {
-                    // Anillo Principal (Runas)
-                    const r = 180 + (Math.random() - 0.5) * 10;
-                    x = r * Math.cos(theta);
-                    y = r * Math.sin(theta);
-                } else if (type < 0.5) {
-                    // Cuadrado Rotado (Geometría)
-                    const size = 140;
-                    const side = Math.floor(Math.random() * 4); 
-                    const offset = (Math.random() - 0.5) * 2 * size;
-                    // Puntos en el perímetro del cuadrado
-                    if (side === 0) { x = size; y = offset; }
-                    else if (side === 1) { x = -size; y = offset; }
-                    else if (side === 2) { x = offset; y = size; }
-                    else { x = offset; y = -size; }
-                } else if (type < 0.7) {
-                    // Anillo Exterior
-                    const r = 280 + (Math.random() - 0.5) * 4;
-                    x = r * Math.cos(theta);
-                    y = r * Math.sin(theta);
-                } else {
-                    // Chispas internas / Relleno
-                    const r = Math.random() * 300;
-                    x = r * Math.cos(theta);
-                    y = r * Math.sin(theta);
+            
+            // Atributo personalizado para saber a qué parte del escudo pertenece la partícula
+            // 0: Vara Central
+            // 1: Círculo Interno
+            // 2: Círculo Externo
+            // 3: Rectángulos Internos
+            // 4: Cuadrado Base
+            // 5: Cuadrado Rotado
+            // 6: Rayos Externos
+            // 7: Círculos Finales
+            // 8: Marcador Mano Izquierda
+            // 9: Marcador Mano Derecha
+            // 10: Núcleo Central (Debug/Referencia)
+            const shapeIds = new Float32Array(PARTICLE_COUNT);
+            
+            // Distribución de partículas
+            let idx = 0;
+            
+            // Helper para asignar rangos
+            const assignRange = (count, id) => {
+                for(let i=0; i<count; i++) {
+                    if(idx >= PARTICLE_COUNT) break;
+                    shapeIds[idx] = id;
+                    // Posición inicial fuera de pantalla para que no moleste
+                    positions[idx*3] = 9999;
+                    positions[idx*3+1] = 9999;
+                    positions[idx*3+2] = 0;
+                    idx++;
                 }
-                
-                z = (Math.random() - 0.5) * 10; // Plano 2D (disco)
+            };
 
-                positions[i * 3] = x;
-                positions[i * 3 + 1] = y;
-                positions[i * 3 + 2] = z;
+            assignRange(8000, 0);  // Vara (Más densa)
+            assignRange(10000, 1); // Círculo Interno
+            assignRange(15000, 2); // Círculo Externo
+            assignRange(10000, 3); // Rectángulos Internos
+            assignRange(10000, 4); // Cuadrado Base
+            assignRange(10000, 5); // Cuadrado Rotado
+            assignRange(10000, 6); // Rayos Externos
+            assignRange(10000, 7); // Círculos Finales
+            assignRange(2500, 8);  // Marcador Mano 1
+            assignRange(2500, 9);  // Marcador Mano 2
+            assignRange(1000, 10); // Núcleo Central
 
-                initialPositions[i * 3] = x;
-                initialPositions[i * 3 + 1] = y;
-                initialPositions[i * 3 + 2] = z;
-
-                velocities[i * 3] = 0;
-                velocities[i * 3 + 1] = 0;
-                velocities[i * 3 + 2] = 0;
-
-                // Mezcla de colores ardientes
-                const mixedColor = color1.clone().lerp(color2, Math.random());
-                colors[i * 3] = mixedColor.r;
-                colors[i * 3 + 1] = mixedColor.g;
-                colors[i * 3 + 2] = mixedColor.b;
-            }
-
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+            geometry.userData = { shapeIds: shapeIds };
 
             // Shader Material personalizado para mejor rendimiento y efectos visuales
             const vertexShader = `
@@ -202,7 +214,7 @@
                 void main() {
                     vColor = color;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = (300.0 / -mvPosition.z); // Tamaño depende de distancia
+                    gl_PointSize = (8000.0 / -mvPosition.z); // Puntos gigantes para que la vara se vea sólida
                     gl_Position = projectionMatrix * mvPosition;
                 }
             `;
@@ -210,11 +222,10 @@
             const fragmentShader = `
                 varying vec3 vColor;
                 void main() {
-                    // Crear un círculo suave
                     float r = distance(gl_PointCoord, vec2(0.5, 0.5));
                     if (r > 0.5) discard;
                     float glow = 1.0 - (r * 2.0);
-                    glow = pow(glow, 1.5);
+                    glow = pow(glow, 2.0);
                     gl_FragColor = vec4(vColor, glow);
                 }
             `;
@@ -238,88 +249,263 @@
         function updateParticles() {
             const posAttr = geometry.attributes.position;
             const colAttr = geometry.attributes.color;
+            const shapeIds = geometry.userData.shapeIds;
+            const positions = posAttr.array; // Usar referencia directa para asegurar actualización
+            const colors = colAttr.array;
             
-            // Usamos un objeto temporal para cálculos vectoriales para evitar GC
-            const p = new THREE.Vector3();
-            const v = new THREE.Vector3();
+            // Colores Neón
+            const colorCenter = new THREE.Color(1.0, 1.0, 0.4); // Amarillo luminoso
+            const colorEdge = new THREE.Color(1.0, 0.2, 0.0);   // Naranja/Rojo
+            const colorHand1 = new THREE.Color(0.0, 0.5, 1.0);  // AZUL (Mano 1)
+            const colorHand2 = new THREE.Color(1.0, 0.0, 0.2);  // ROJO (Mano 2)
             
-            // Calcular base del sistema de coordenadas basado en las dos manos
-            const center = new THREE.Vector3().addVectors(hand1Pos, hand2Pos).multiplyScalar(0.5);
-            const diff = new THREE.Vector3().subVectors(hand2Pos, hand1Pos);
-            const distance = diff.length();
-            
-            // Eje X local alineado con las manos (Vector Director)
-            const axisX = diff.clone().normalize();
-            // Eje Y local perpendicular (en 2D plano XY)
-            const axisY = new THREE.Vector3(-axisX.y, axisX.x, 0);
-            
-            // Escala basada en la distancia (con un factor para que ajuste bien al tamaño de manos)
-            const scale = Math.max(0.01, distance / 350.0); 
-
-            // Rotación global del mandala
-            const angle = time * 1.5; 
-            const sinA = Math.sin(angle);
-            const cosA = Math.cos(angle);
-            
-            // Rotación inversa para el cuadrado (efecto visual complejo)
-            const angle2 = -time * 0.8;
-            const sinB = Math.sin(angle2);
-            const cosB = Math.cos(angle2);
+            // Constantes de dimensiones
+            const INNER_RADIUS = 180;
+            const OUTER_RADIUS = 280;
+            const MAX_HEIGHT = 300;
 
             for (let i = 0; i < PARTICLE_COUNT; i++) {
                 const ix = i * 3;
-                const iy = i * 3 + 1;
-                const iz = i * 3 + 2;
-
-                p.set(positions[ix], positions[iy], positions[iz]);
-                v.set(velocities[ix], velocities[iy], velocities[iz]);
-
-                // Posición original en el espacio local del mandala
-                const ox = initialPositions[ix];
-                const oy = initialPositions[iy];
-                const oz = initialPositions[iz];
+                const id = shapeIds[i];
                 
-                // 1. Aplicar animación de rotación interna (giro del mandala)
-                let rx, ry;
-                const distSq = ox*ox + oy*oy;
-                if (distSq < 160*160 && distSq > 120*120) {
-                    rx = ox * cosB - oy * sinB;
-                    ry = ox * sinB + oy * cosB;
-                } else {
-                    rx = ox * cosA - oy * sinA;
-                    ry = ox * sinA + oy * cosA;
+                // Variables temporales para posición
+                let px = 0, py = 0, pz = 0;
+                let visible = false;
+                let noise = (Math.random() - 0.5) * 5.0; 
+                let isHandMarker = false;
+
+                // --- LÓGICA DE FORMAS ---
+                
+                // 0: VARA CENTRAL (Staff)
+                if (id === 0) {
+                    if (animValues.staffHeight > 1) {
+                        visible = true;
+                        // Distribuir a lo largo de la altura (-h/2 a +h/2)
+                        const h = animValues.staffHeight;
+                        const t = (i % 8000) / 8000.0; // 0 a 1
+                        const yLocal = (t - 0.5) * h; // Centrado verticalmente en 0 (mitad de pantalla)
+                        
+                        // Añadir grosor a la vara
+                        const thickness = 25.0; // Vara muy gruesa para que sea imposible no verla
+                        const xLocal = (Math.random() - 0.5) * thickness;
+
+                        // Rotar la vara según staffAngle
+                        const cosR = Math.cos(animValues.staffAngle);
+                        const sinR = Math.sin(animValues.staffAngle);
+                        
+                        px = (xLocal * cosR - yLocal * sinR) + noise;
+                        py = (xLocal * sinR + yLocal * cosR) + noise;
+                        pz = (Math.random() - 0.5) * 5;
+                    }
+                }
+                
+                // 1 & 2: CÍRCULOS (Inner & Outer)
+                else if (id === 1 || id === 2) {
+                    const radius = (id === 1) ? INNER_RADIUS : OUTER_RADIUS;
+                    const count = (id === 1) ? 10000 : 15000;
+                    const t = (i % count) / count; // 0 a 1 (Progreso angular)
+                    const angle = t * Math.PI * 2; // 0 a 360
+                    
+                    // Solo dibujar si el ángulo está dentro del progreso actual de rotación
+                    // Lógica de rastro simplificada:
+                    // La vara empieza en 0 (vertical). Gira hasta PI (invertido).
+                    // Mostramos el arco desde 0 hasta el ángulo actual (y su espejo)
+                    
+                    let currentRot = Math.abs(animValues.staffAngle);
+                    // Normalizar para comparación (0 a PI)
+                    if (currentRot > Math.PI) currentRot -= Math.PI;
+                    
+                    // Si ya completamos el paso 3, mostramos todo el círculo
+                    if (currentStep > 3) {
+                        visible = true;
+                    } else if (currentStep === 3) {
+                        // Durante la rotación, mostrar si el ángulo de la partícula es menor al ángulo actual
+                        // Ajustamos para que dibuje en ambos lados (simetría central)
+                        // Mapear ángulo de partícula a 0-PI (simetría)
+                        let pAngle = angle % Math.PI; // 0 a PI
+                        
+                        // Ajuste de fase: La vara empieza vertical (PI/2 en coordenadas polares estándar)
+                        // Pero nuestro staffAngle es 0 para vertical.
+                        // Simplificación visual: Mostrar todo lo que esté "detrás" del barrido
+                        // Barrido visual aproximado:
+                        if (animValues.circleProgress > 0.1) {
+                             // Mostrar aleatoriamente para efecto de construcción
+                             if (Math.random() < animValues.circleProgress) visible = true;
+                        }
+                    }
+
+                    if (visible) {
+                        px = radius * Math.cos(angle) + noise;
+                        py = radius * Math.sin(angle) + noise;
+                        pz = (Math.random() - 0.5) * 2;
+                    }
                 }
 
-                // 2. Transformar al espacio de mundo definido por las manos
-                // Pos = Center + (RotatedX * AxisX * Scale) + (RotatedY * AxisY * Scale)
-                const destX = center.x + (rx * axisX.x + ry * axisY.x) * scale;
-                const destY = center.y + (rx * axisX.y + ry * axisY.y) * scale;
-                const destZ = center.z + oz * scale;
+                // 3: RECTÁNGULOS INTERNOS
+                else if (id === 3) {
+                    if (animValues.innerRectAlpha > 0.01) {
+                        visible = true;
+                        // 3 rectángulos: 0, 45, 90 grados
+                        const subGroup = i % 3;
+                        const t = (i % 100) / 100.0; // A lo largo del perímetro
+                        
+                        let w = INNER_RADIUS * 0.7; // Tamaño relativo al círculo interno
+                        let h = INNER_RADIUS * 0.4;
+                        
+                        // Generar puntos en perímetro de rectángulo
+                        // Simplificado: Líneas aleatorias dentro de la caja rotada
+                        let lx = (Math.random() - 0.5) * 2 * w;
+                        let ly = (Math.random() - 0.5) * 2 * h;
+                        
+                        // Forzar a bordes para que parezca un rectángulo hueco
+                        if (Math.random() > 0.5) {
+                            lx = (Math.random() > 0.5 ? 1 : -1) * w;
+                        } else {
+                            ly = (Math.random() > 0.5 ? 1 : -1) * h;
+                        }
 
-                // Física de resorte: Mover hacia la posición rotada
-                v.x += (destX - p.x) * 0.1;
-                v.y += (destY - p.y) * 0.1;
-                v.z += (destZ - p.z) * 0.1;
+                        let rot = 0;
+                        if (subGroup === 1) rot = Math.PI / 4; // 45
+                        if (subGroup === 2) rot = Math.PI / 2; // 90
 
-                // Fricción (Damping) para crear efecto de arrastre
-                v.multiplyScalar(0.80);
+                        px = lx * Math.cos(rot) - ly * Math.sin(rot) + noise;
+                        py = lx * Math.sin(rot) + ly * Math.cos(rot) + noise;
+                        pz = 0;
+                    }
+                }
 
-                // Actualizar posición
-                positions[ix] += v.x;
-                positions[iy] += v.y;
-                positions[iz] += v.z;
+                // 4 & 5: CUADRADOS (Base y Rotado)
+                else if (id === 4 || id === 5) {
+                    if (animValues.squareWidth > 10) {
+                        visible = true;
+                        // Cuadrado formado por la expansión de la vara
+                        // Alto fijo (MAX_HEIGHT), Ancho variable (animValues.squareWidth)
+                        
+                        let w = animValues.squareWidth;
+                        let h = MAX_HEIGHT; // La altura de la vara original
+                        
+                        // Puntos en el perímetro
+                        let lx, ly;
+                        if (Math.random() > 0.5) {
+                            lx = (Math.random() - 0.5) * 2 * w;
+                            ly = (Math.random() > 0.5 ? 1 : -1) * h;
+                        } else {
+                            lx = (Math.random() > 0.5 ? 1 : -1) * w;
+                            ly = (Math.random() - 0.5) * 2 * h;
+                        }
 
-                // Guardar velocidad
-                velocities[ix] = v.x;
-                velocities[iy] = v.y;
-                velocities[iz] = v.z;
+                        // Rotación base (si es el cuadrado 2)
+                        let rot = 0;
+                        if (id === 5) {
+                            rot = animValues.squareRotation; // Gira dinámicamente
+                        }
 
-                // Color dinámico basado en velocidad
-                const speed = v.length() * 0.02;
-                // Hacer que brille más al moverse
-                colAttr.array[ix] = 1.0;     // R (Siempre alto para naranja)
-                colAttr.array[iy] = 0.5 + speed; // G (Sube a amarillo)
-                colAttr.array[iz] = speed * 0.5; // B (Sube a blanco)
+                        px = lx * Math.cos(rot) - ly * Math.sin(rot) + noise;
+                        py = lx * Math.sin(rot) + ly * Math.cos(rot) + noise;
+                        pz = 0;
+                    }
+                }
+
+                // 6: RAYOS EXTERNOS
+                else if (id === 6) {
+                    if (animValues.outerRaysAlpha > 0.01) {
+                        visible = true;
+                        // Rayos desde borde inner a borde outer
+                        // No tocar zona inner
+                        const angle = (Math.random() * Math.PI * 2);
+                        // Radio entre Inner y Outer
+                        const r = INNER_RADIUS + Math.random() * (OUTER_RADIUS - INNER_RADIUS);
+                        
+                        px = r * Math.cos(angle);
+                        py = r * Math.sin(angle);
+                        pz = 0;
+                    }
+                }
+
+                // 7: CÍRCULOS FINALES
+                else if (id === 7) {
+                    if (animValues.finalCirclesAlpha > 0.01) {
+                        visible = true;
+                        // 4 círculos en los puntos medios del cuadrado base (id 4)
+                        // Puntos medios: (0, H), (0, -H), (W, 0), (-W, 0)
+                        // Usamos el ancho final del cuadrado que debe ser igual al alto
+                        const size = MAX_HEIGHT; 
+                        const subGroup = i % 4;
+                        let cx = 0, cy = 0;
+                        
+                        if (subGroup === 0) cy = size;
+                        if (subGroup === 1) cy = -size;
+                        if (subGroup === 2) cx = size;
+                        if (subGroup === 3) cx = -size;
+
+                        const rSmall = 30;
+                        const angle = Math.random() * Math.PI * 2;
+                        
+                        px = cx + rSmall * Math.cos(angle) + noise;
+                        py = cy + rSmall * Math.sin(angle) + noise;
+                        pz = 0;
+                    }
+                }
+
+                // 8 & 9: MARCADORES DE MANOS (Siempre visibles si hay detección)
+                else if (id === 8 || id === 9) {
+                    if (isHandDetected) {
+                        visible = true;
+                        isHandMarker = true;
+                        const target = (id === 8) ? hand1 : hand2;
+                        
+                        // Esfera de energía alrededor de la mano
+                        const r = 20 * Math.random(); // Radio de la energía de la mano
+                        const theta = Math.random() * Math.PI * 2;
+                        const phi = Math.random() * Math.PI;
+                        
+                        px = target.x + r * Math.sin(phi) * Math.cos(theta);
+                        py = target.y + r * Math.sin(phi) * Math.sin(theta);
+                        pz = target.z + r * Math.cos(phi);
+                    }
+                }
+
+                // 10: NÚCLEO CENTRAL (Siempre visible para referencia)
+                else if (id === 10) {
+                    visible = true;
+                    // Latido en el centro (0,0) para marcar el origen exacto
+                    const pulse = 1.0 + Math.sin(time * 8.0) * 0.3;
+                    const r = 20 * Math.random() * pulse;
+                    const theta = Math.random() * Math.PI * 2;
+                    px = r * Math.cos(theta);
+                    py = r * Math.sin(theta);
+                    pz = (Math.random() - 0.5) * 5;
+                }
+
+                // --- APLICAR POSICIÓN Y COLOR ---
+                if (visible) {
+                    positions[ix] = px;
+                    positions[ix+1] = py;
+                    positions[ix+2] = pz;
+
+                    // Color basado en distancia al centro (Amarillo -> Rojo)
+                    const dist = Math.sqrt(px*px + py*py);
+                    const tColor = Math.min(1.0, dist / 350.0);
+                    let c;
+                    if (isHandMarker) {
+                        c = (id === 8) ? colorHand1 : colorHand2; // Diferenciar manos por color
+                    } else {
+                        c = colorCenter.clone().lerp(colorEdge, tColor);
+                    }
+                    
+                    // Alpha global por grupo
+                    let alpha = 1.0;
+                    if (id === 3) alpha = animValues.innerRectAlpha;
+                    if (id === 6) alpha = animValues.outerRaysAlpha;
+                    if (id === 7) alpha = animValues.finalCirclesAlpha;
+
+                    colors[ix] = c.r * alpha;
+                    colors[ix+1] = c.g * alpha;
+                    colors[ix+2] = c.b * alpha;
+                } else {
+                    // Ocultar lejos
+                    positions[ix] = 9999;
+                }
             }
 
             posAttr.needsUpdate = true;
@@ -330,8 +516,148 @@
             requestAnimationFrame(animate);
             time += 0.01;
             
+            // Lógica de la Máquina de Estados
+            updateSpellLogic();
+
             updateParticles();
             renderer.render(scene, camera);
+        }
+
+        // --- LÓGICA DEL HECHIZO (STATE MACHINE) ---
+        function updateSpellLogic() {
+            if (!isHandDetected) {
+                instructionEl.innerHTML = "Coloca ambas manos frente a la cámara";
+                return;
+            }
+
+            const dist = hand1.distanceTo(hand2);
+            const dy = Math.abs(hand1.y - hand2.y);
+            const dx = Math.abs(hand1.x - hand2.x);
+            
+            // Vector entre manos para calcular ángulo
+            const diff = new THREE.Vector3().subVectors(hand2, hand1);
+            const angle = Math.atan2(diff.y, diff.x); // -PI a PI
+
+            let msg = "";
+
+            // STEP 0: PRAYER (Manos juntas)
+            if (currentStep === 0) {
+                msg = "1) Junta las manos (🙏)";
+                if (dist < 180) { // Muy tolerante
+                    currentStep = 1;
+                }
+            }
+            
+            // STEP 1: SEPARAR VERTICALMENTE (Vara)
+            else if (currentStep === 1) {
+                msg = "2) Separa una mano arriba y otra abajo";
+                // Mapear distancia vertical a altura de vara
+                // Max height deseada ~300
+                let targetH = Math.min(600, dy * 2.5); // Altura máxima aumentada (600 = pantalla completa vert)
+                animValues.staffHeight += (targetH - animValues.staffHeight) * 0.1;
+
+                if (animValues.staffHeight > 250) { 
+                    currentStep = 2;
+                    animValues.staffHeight = 600; // Fijar altura máxima para que no se encoja
+                }
+            }
+
+            // STEP 2: PREPARAR ROTACIÓN (Pellizco)
+            else if (currentStep === 2) {
+                msg = "3) Haz gesto de pellizco (🤏) y rota las manos 180°";
+                if (isPinching) {
+                    currentStep = 3;
+                    // Guardar ángulo exacto donde empezamos para medir el progreso relativo
+                    animValues.startAngle = angle;
+                }
+            }
+
+            // STEP 3: ROTACIÓN (Crear Círculos)
+            else if (currentStep === 3) {
+                msg = "Gira las manos 180° (como las agujas del reloj)";
+                
+                // 1. Calcular cuánto hemos girado desde el inicio (Delta)
+                let delta = angle - animValues.startAngle;
+                
+                // Normalizar delta para manejar el salto de PI a -PI
+                while (delta <= -Math.PI) delta += Math.PI*2;
+                while (delta > Math.PI) delta -= Math.PI*2;
+                
+                // 2. Progreso: 0 a PI (180 grados)
+                // Usamos valor absoluto para permitir giro izquierda o derecha
+                let progress = Math.abs(delta) / Math.PI; 
+                
+                // Actualizar visuales
+                animValues.circleProgress = Math.min(1.0, progress);
+                animValues.staffAngle = delta; 
+
+                // 3. Condición de salida: Completar 180 grados (aprox 90% del camino)
+                if (progress > 0.9) {
+                    currentStep = 4;
+                    animValues.circleProgress = 1.0; // Asegurar círculo completo
+                    animValues.staffAngle = 0; // Reset visual
+                }
+            }
+
+            // STEP 4: REGRESAR AL CENTRO (Rectángulos)
+            else if (currentStep === 4) {
+                msg = "4) Junta las manos al centro de nuevo";
+                
+                // Rectángulos aparecen mientras manos se acercan
+                // Distancia va de 300 a 0. Alpha va de 0 a 1.
+                let progress = 1.0 - (dist / 300.0);
+                animValues.innerRectAlpha = Math.max(0, Math.min(1, progress));
+
+                if (dist < 60) {
+                    currentStep = 5;
+                    animValues.innerRectAlpha = 1; // Asegurar visible
+                }
+            }
+
+            // STEP 5: SEPARAR HORIZONTAL (Cuadrado)
+            else if (currentStep === 5) {
+                msg = "5) Separa las manos hacia los lados (Izquierda/Derecha)";
+                // Mapear dx a squareWidth
+                let targetW = Math.min(300, dx * 1.2); // 300 es el alto (MAX_HEIGHT)
+                animValues.squareWidth += (targetW - animValues.squareWidth) * 0.1;
+                
+                // Rayos externos aparecen
+                animValues.outerRaysAlpha = Math.min(1, animValues.squareWidth / 200.0);
+
+                if (animValues.squareWidth > 280) {
+                    currentStep = 6;
+                }
+            }
+
+            // STEP 6: ROTAR MANOS (Estrella)
+            else if (currentStep === 6) {
+                msg = "6) Gira las manos 45°";
+                // Detectar rotación de muñeca es difícil con solo puntos, 
+                // usamos la inclinación del vector entre índice y muñeca o simplemente la inclinación general
+                // Si el usuario inclina las manos, el vector diff (dx, dy) cambia de ser horizontal puro
+                
+                // Si dy aumenta sin que dx disminuya mucho (rotación sobre eje Z)
+                // O simplemente usamos el ángulo de nuevo
+                let rot = Math.abs(angle); // 0 es horizontal
+                if (rot > 0.5) { // ~30 grados
+                    let targetRot = Math.PI / 4; // 45 grados
+                    animValues.squareRotation += (targetRot - animValues.squareRotation) * 0.1;
+                    
+                    if (animValues.squareRotation > 0.7) {
+                        currentStep = 7;
+                    }
+                }
+            }
+
+            // STEP 7: FINAL
+            else if (currentStep === 7) {
+                msg = "¡HECHIZO COMPLETO!";
+                animValues.finalCirclesAlpha += 0.05;
+                if (animValues.finalCirclesAlpha > 1) animValues.finalCirclesAlpha = 1;
+            }
+
+            instructionEl.innerHTML = msg;
+            debugEl.innerHTML = `Paso: ${currentStep} | Sep: ${Math.round(dy)} | Altura Vara: ${Math.round(animValues.staffHeight)}`;
         }
 
         // --- MEDIAPIPE HANDS ---
@@ -340,36 +666,76 @@
             videoContainer.style.display = 'block';
 
             const handsDetected = results.multiHandLandmarks.length;
+            const wasHandDetected = isHandDetected; // Guardar estado anterior
 
             if (handsDetected > 0) {
                 isHandDetected = true;
                 
-                // Helper para convertir coordenadas
-                const getHandPos = (landmarks) => {
-                    const index = landmarks[8];
+                // Helper para obtener posición
+                const getPos = (landmarks, index) => {
                     return new THREE.Vector3(
-                        (0.5 - index.x) * window.innerWidth,
-                        (0.5 - index.y) * window.innerHeight,
-                        -index.z * 500
+                        (0.5 - landmarks[index].x) * window.innerWidth,
+                        (0.5 - landmarks[index].y) * window.innerHeight,
+                        0
                     );
                 };
 
-                let p1, p2;
+                // Detectar Pinch (Pulgar 4 e Índice 8 cerca)
+                const checkPinch = (landmarks) => {
+                    const p1 = getPos(landmarks, 4);
+                    const p2 = getPos(landmarks, 8);
+                    return p1.distanceTo(p2) < 40;
+                };
 
-                if (handsDetected >= 2) {
-                    // Dos manos: Control total
-                    p1 = getHandPos(results.multiHandLandmarks[0]);
-                    p2 = getHandPos(results.multiHandLandmarks[1]);
+                let h1, h2;
+
+                if (handsDetected === 2) {
+                    // Nuevas posiciones detectadas
+                    const hA = getPos(results.multiHandLandmarks[0], 9);
+                    const hB = getPos(results.multiHandLandmarks[1], 9);
+                    
+                    // TRACKING INTELIGENTE:
+                    // Si ya teníamos manos detectadas, asignamos las nuevas a las más cercanas (por distancia)
+                    // Esto evita que se intercambien (Azul/Rojo) cuando se cruzan o giran.
+                    if (wasHandDetected) {
+                        const distA1 = hand1.distanceTo(hA);
+                        const distA2 = hand1.distanceTo(hB);
+                        
+                        if (distA1 < distA2) {
+                            hand1.lerp(hA, 0.5);
+                            hand2.lerp(hB, 0.5);
+                            isPinching = checkPinch(results.multiHandLandmarks[0]) && checkPinch(results.multiHandLandmarks[1]);
+                        } else {
+                            hand1.lerp(hB, 0.5);
+                            hand2.lerp(hA, 0.5);
+                            isPinching = checkPinch(results.multiHandLandmarks[1]) && checkPinch(results.multiHandLandmarks[0]);
+                        }
+                    } else {
+                        // Primera detección: Ordenar por X para inicializar (Izq=Azul, Der=Rojo)
+                        if (hA.x < hB.x) {
+                            hand1.copy(hA); hand2.copy(hB);
+                        } else {
+                            hand1.copy(hB); hand2.copy(hA);
+                        }
+                        isPinching = checkPinch(results.multiHandLandmarks[0]) && checkPinch(results.multiHandLandmarks[1]);
+                    }
                 } else {
-                    // Una mano: Modo espejo (Simula la segunda mano opuesta al centro)
-                    p1 = getHandPos(results.multiHandLandmarks[0]);
-                    p2 = p1.clone().multiplyScalar(-1); 
+                    // Una mano (Modo espejo para pruebas)
+                    h1 = getPos(results.multiHandLandmarks[0], 9);
+                    // La segunda mano es el espejo de la primera respecto al centro (0,0)
+                    // Como las coordenadas de Three.js están centradas si la cámara está en 0,0,z
+                    // Pero aquí getPos devuelve coords de pantalla. Ajustamos:
+                    // Asumimos centro pantalla es 0,0 para lógica
+                    
+                    hand2.copy(h1); // Mano derecha sigue a la real
+                    hand1.copy(h1).multiplyScalar(-1); // Mano izquierda es espejo
+                    // Ajuste visual simple:
+                    hand2.x = h1.x; hand2.y = h1.y;
+                    hand1.x = -h1.x; hand1.y = h1.y; // Espejo en X
+                    
+                    isPinching = checkPinch(results.multiHandLandmarks[0]);
                 }
                 
-                // Suavizado (Lerp) para movimiento fluido
-                hand1Pos.lerp(p1, 0.2);
-                hand2Pos.lerp(p2, 0.2);
-
             } else {
                 isHandDetected = false;
             }
@@ -397,30 +763,33 @@
             height: 480
         });
         
-        // Iniciar cámara con manejo de errores
-        cameraUtils.start().catch(err => {
-            console.error("Error al iniciar cámara:", err);
-            loadingEl.innerHTML = "Error: No se pudo acceder a la cámara.<br>Usa el mouse para interactuar.";
-            setTimeout(() => { loadingEl.style.display = 'none'; }, 3000);
-        });
+        // Función para solicitar permiso de cámara explícitamente (Estilo Meet)
+        async function requestCameraAccess() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                loadingEl.innerHTML = "Error: Tu navegador no soporta acceso a la cámara.";
+                return;
+            }
 
-        // --- INTERACCIÓN MOUSE (FALLBACK) ---
-        function onMouseMove(event) {
-            if (!isHandDetected) {
-                // Convertir mouse a coordenadas de mundo aproximadas en Z=0
-                const mouseX = (event.clientX / window.innerWidth) * 2 - 1;
-                const mouseY = -(event.clientY / window.innerHeight) * 2 + 1;
+            try {
+                // 1. Solicitar permiso explícitamente al navegador
+                // Esto hará aparecer el popup nativo de "Permitir cámara"
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
                 
-                const vector = new THREE.Vector3(mouseX, mouseY, 0.5);
-                vector.unproject(camera);
+                // 2. Si el usuario acepta, detenemos este stream temporal (MediaPipe usará el suyo)
+                stream.getTracks().forEach(track => track.stop());
                 
-                const dir = vector.sub(camera.position).normalize();
-                const distance = -camera.position.z / dir.z;
-                const pos = camera.position.clone().add(dir.multiplyScalar(distance));
-                
-                targetPosition.copy(pos);
+                // 3. Iniciamos la librería de MediaPipe
+                await cameraUtils.start();
+            } catch (err) {
+                console.error("Permiso denegado:", err);
+                loadingEl.innerHTML = "⚠️ <strong>Permiso requerido</strong><br>Por favor permite el acceso a la cámara en la barra de dirección y recarga la página.";
+                loadingEl.style.color = "#ff5555";
+                loadingEl.style.borderColor = "#ff5555";
             }
         }
+
+        // Iniciar solicitud
+        requestCameraAccess();
 
         function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
