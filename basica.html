@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Escudo Místico - Doctor Strange</title>
+    <title>Partículas 3D Controladas por Manos</title>
     <style>
         body {
             margin: 0;
@@ -79,8 +79,8 @@
     </div>
 
     <div class="controls">
-        Usa AMBAS MANOS para invocar.<br>
-        Junta las manos, sepáralas y gira para crear el portal.
+        Mueve tu mano o mouse para atraer partículas.<br>
+        Usa el dedo índice como punto de gravedad.
     </div>
 
     <script>
@@ -93,8 +93,7 @@
         // --- VARIABLES GLOBALES ---
         let scene, camera, renderer, particles, geometry, material;
         let positions, velocities, initialPositions;
-        let hand1Pos = new THREE.Vector3(-50, 0, 0);
-        let hand2Pos = new THREE.Vector3(50, 0, 0);
+        let targetPosition = new THREE.Vector3(0, 0, 0);
         let isHandDetected = false;
         let time = 0;
 
@@ -135,43 +134,14 @@
             initialPositions = new Float32Array(PARTICLE_COUNT * 3);
             const colors = new Float32Array(PARTICLE_COUNT * 3);
 
-            const color1 = new THREE.Color(0xffaa00); // Naranja Místico
-            const color2 = new THREE.Color(0xff2200); // Rojo Fuego
+            const color1 = new THREE.Color(0x00ffff); // Cyan
+            const color2 = new THREE.Color(0xff00cc); // Magenta
 
             for (let i = 0; i < PARTICLE_COUNT; i++) {
-                // Generación de Mandala / Escudo
-                let x, y, z;
-                const type = Math.random();
-                const theta = Math.random() * Math.PI * 2;
-
-                if (type < 0.3) {
-                    // Anillo Principal (Runas)
-                    const r = 180 + (Math.random() - 0.5) * 10;
-                    x = r * Math.cos(theta);
-                    y = r * Math.sin(theta);
-                } else if (type < 0.5) {
-                    // Cuadrado Rotado (Geometría)
-                    const size = 140;
-                    const side = Math.floor(Math.random() * 4); 
-                    const offset = (Math.random() - 0.5) * 2 * size;
-                    // Puntos en el perímetro del cuadrado
-                    if (side === 0) { x = size; y = offset; }
-                    else if (side === 1) { x = -size; y = offset; }
-                    else if (side === 2) { x = offset; y = size; }
-                    else { x = offset; y = -size; }
-                } else if (type < 0.7) {
-                    // Anillo Exterior
-                    const r = 280 + (Math.random() - 0.5) * 4;
-                    x = r * Math.cos(theta);
-                    y = r * Math.sin(theta);
-                } else {
-                    // Chispas internas / Relleno
-                    const r = Math.random() * 300;
-                    x = r * Math.cos(theta);
-                    y = r * Math.sin(theta);
-                }
-                
-                z = (Math.random() - 0.5) * 10; // Plano 2D (disco)
+                // Posición aleatoria en cubo
+                const x = (Math.random() - 0.5) * 1000;
+                const y = (Math.random() - 0.5) * 1000;
+                const z = (Math.random() - 0.5) * 1000;
 
                 positions[i * 3] = x;
                 positions[i * 3 + 1] = y;
@@ -185,11 +155,10 @@
                 velocities[i * 3 + 1] = 0;
                 velocities[i * 3 + 2] = 0;
 
-                // Mezcla de colores ardientes
-                const mixedColor = color1.clone().lerp(color2, Math.random());
-                colors[i * 3] = mixedColor.r;
-                colors[i * 3 + 1] = mixedColor.g;
-                colors[i * 3 + 2] = mixedColor.b;
+                // Color base
+                colors[i * 3] = color1.r;
+                colors[i * 3 + 1] = color1.g;
+                colors[i * 3 + 2] = color1.b;
             }
 
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -242,29 +211,7 @@
             // Usamos un objeto temporal para cálculos vectoriales para evitar GC
             const p = new THREE.Vector3();
             const v = new THREE.Vector3();
-            
-            // Calcular base del sistema de coordenadas basado en las dos manos
-            const center = new THREE.Vector3().addVectors(hand1Pos, hand2Pos).multiplyScalar(0.5);
-            const diff = new THREE.Vector3().subVectors(hand2Pos, hand1Pos);
-            const distance = diff.length();
-            
-            // Eje X local alineado con las manos (Vector Director)
-            const axisX = diff.clone().normalize();
-            // Eje Y local perpendicular (en 2D plano XY)
-            const axisY = new THREE.Vector3(-axisX.y, axisX.x, 0);
-            
-            // Escala basada en la distancia (con un factor para que ajuste bien al tamaño de manos)
-            const scale = Math.max(0.01, distance / 350.0); 
-
-            // Rotación global del mandala
-            const angle = time * 1.5; 
-            const sinA = Math.sin(angle);
-            const cosA = Math.cos(angle);
-            
-            // Rotación inversa para el cuadrado (efecto visual complejo)
-            const angle2 = -time * 0.8;
-            const sinB = Math.sin(angle2);
-            const cosB = Math.cos(angle2);
+            const target = targetPosition; // La mano o el mouse
 
             for (let i = 0; i < PARTICLE_COUNT; i++) {
                 const ix = i * 3;
@@ -274,35 +221,40 @@
                 p.set(positions[ix], positions[iy], positions[iz]);
                 v.set(velocities[ix], velocities[iy], velocities[iz]);
 
-                // Posición original en el espacio local del mandala
+                // 1. Fuerza de atracción hacia el objetivo (Mano/Mouse)
+                const dist = p.distanceTo(target);
+                
+                if (dist < 800) { // Solo afecta si está relativamente cerca
+                    const force = (ATTRACT_RANGE / (dist + 0.1)) * ATTRACT_STRENGTH;
+                    const dx = target.x - p.x;
+                    const dy = target.y - p.y;
+                    const dz = target.z - p.z;
+                    
+                    // Normalizar y aplicar fuerza
+                    const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    if (len > 0) {
+                        v.x += (dx / len) * force * 0.05;
+                        v.y += (dy / len) * force * 0.05;
+                        v.z += (dz / len) * force * 0.05;
+                    }
+                }
+
+                // 2. Fuerza de retorno a posición original (Elasticidad)
                 const ox = initialPositions[ix];
                 const oy = initialPositions[iy];
                 const oz = initialPositions[iz];
                 
-                // 1. Aplicar animación de rotación interna (giro del mandala)
-                let rx, ry;
-                const distSq = ox*ox + oy*oy;
-                if (distSq < 160*160 && distSq > 120*120) {
-                    rx = ox * cosB - oy * sinB;
-                    ry = ox * sinB + oy * cosB;
-                } else {
-                    rx = ox * cosA - oy * sinA;
-                    ry = ox * sinA + oy * cosA;
-                }
+                v.x += (ox - p.x) * 0.015;
+                v.y += (oy - p.y) * 0.015;
+                v.z += (oz - p.z) * 0.015;
 
-                // 2. Transformar al espacio de mundo definido por las manos
-                // Pos = Center + (RotatedX * AxisX * Scale) + (RotatedY * AxisY * Scale)
-                const destX = center.x + (rx * axisX.x + ry * axisY.x) * scale;
-                const destY = center.y + (rx * axisX.y + ry * axisY.y) * scale;
-                const destZ = center.z + oz * scale;
+                // 3. Ruido / Movimiento aleatorio
+                v.x += (Math.random() - 0.5) * 0.5;
+                v.y += (Math.random() - 0.5) * 0.5;
+                v.z += (Math.random() - 0.5) * 0.5;
 
-                // Física de resorte: Mover hacia la posición rotada
-                v.x += (destX - p.x) * 0.1;
-                v.y += (destY - p.y) * 0.1;
-                v.z += (destZ - p.z) * 0.1;
-
-                // Fricción (Damping) para crear efecto de arrastre
-                v.multiplyScalar(0.80);
+                // Aplicar fricción
+                v.multiplyScalar(DAMPING);
 
                 // Actualizar posición
                 positions[ix] += v.x;
@@ -315,11 +267,13 @@
                 velocities[iz] = v.z;
 
                 // Color dinámico basado en velocidad
-                const speed = v.length() * 0.02;
-                // Hacer que brille más al moverse
-                colAttr.array[ix] = 1.0;     // R (Siempre alto para naranja)
-                colAttr.array[iy] = 0.5 + speed; // G (Sube a amarillo)
-                colAttr.array[iz] = speed * 0.5; // B (Sube a blanco)
+                const speed = v.length();
+                const r = Math.min(1.0, speed * 0.1);
+                const b = Math.max(0.2, 1.0 - speed * 0.1);
+                
+                colAttr.array[ix] = r;     // R
+                colAttr.array[iy] = speed * 0.05; // G
+                colAttr.array[iz] = b;     // B
             }
 
             posAttr.needsUpdate = true;
@@ -330,6 +284,11 @@
             requestAnimationFrame(animate);
             time += 0.01;
             
+            // Rotación suave de la escena si no hay interacción fuerte
+            if (!isHandDetected) {
+                scene.rotation.y = Math.sin(time * 0.2) * 0.1;
+            }
+
             updateParticles();
             renderer.render(scene, camera);
         }
@@ -339,36 +298,24 @@
             loadingEl.style.display = 'none';
             videoContainer.style.display = 'block';
 
-            const handsDetected = results.multiHandLandmarks.length;
-
-            if (handsDetected > 0) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 isHandDetected = true;
+                const landmarks = results.multiHandLandmarks[0];
                 
-                // Helper para convertir coordenadas
-                const getHandPos = (landmarks) => {
-                    const index = landmarks[8];
-                    return new THREE.Vector3(
-                        (0.5 - index.x) * window.innerWidth,
-                        (0.5 - index.y) * window.innerHeight,
-                        -index.z * 500
-                    );
-                };
-
-                let p1, p2;
-
-                if (handsDetected >= 2) {
-                    // Dos manos: Control total
-                    p1 = getHandPos(results.multiHandLandmarks[0]);
-                    p2 = getHandPos(results.multiHandLandmarks[1]);
-                } else {
-                    // Una mano: Modo espejo (Simula la segunda mano opuesta al centro)
-                    p1 = getHandPos(results.multiHandLandmarks[0]);
-                    p2 = p1.clone().multiplyScalar(-1); 
-                }
+                // Usamos el índice (landmark 8)
+                const indexFinger = landmarks[8];
                 
-                // Suavizado (Lerp) para movimiento fluido
-                hand1Pos.lerp(p1, 0.2);
-                hand2Pos.lerp(p2, 0.2);
+                // Convertir coordenadas normalizadas (0-1) a coordenadas de mundo Three.js
+                // Nota: MediaPipe X está invertido visualmente en modo selfie
+                const x = (0.5 - indexFinger.x) * window.innerWidth; 
+                const y = (0.5 - indexFinger.y) * window.innerHeight; 
+                // Z es aproximado
+                const z = -indexFinger.z * 500; 
+
+                // Suavizado simple (Lerp)
+                targetPosition.x += (x - targetPosition.x) * 0.2;
+                targetPosition.y += (y - targetPosition.y) * 0.2;
+                targetPosition.z += (z - targetPosition.z) * 0.2;
 
             } else {
                 isHandDetected = false;
@@ -380,7 +327,7 @@
         }});
 
         hands.setOptions({
-            maxNumHands: 2,
+            maxNumHands: 1,
             modelComplexity: 1,
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
