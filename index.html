@@ -145,16 +145,16 @@
                 // Generación de Mandala / Escudo
                 let x, y, z;
                 let type = 0; // 0: Ring, 1: Square
-                const type = Math.random();
+                const rand = Math.random();
                 const theta = Math.random() * Math.PI * 2;
 
-                if (type < 0.3) {
+                if (rand < 0.3) {
                     // Anillo Principal (Runas)
                     const r = 180 + (Math.random() - 0.5) * 10;
                     x = r * Math.cos(theta);
                     y = r * Math.sin(theta);
                     type = 0;
-                } else if (type < 0.5) {
+                } else if (rand < 0.5) {
                     // Cuadrado Rotado (Geometría)
                     const size = 140;
                     const side = Math.floor(Math.random() * 4); 
@@ -165,7 +165,7 @@
                     else if (side === 2) { x = offset; y = size; }
                     else { x = offset; y = -size; }
                     type = 1;
-                } else if (type < 0.7) {
+                } else if (rand < 0.7) {
                     // Anillo Exterior
                     const r = 280 + (Math.random() - 0.5) * 4;
                     x = r * Math.cos(theta);
