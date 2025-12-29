@@ -85,7 +85,7 @@
 
     <script>
         // --- CONFIGURACIÓN ---
-        const PARTICLE_COUNT = 999999;
+        const PARTICLE_COUNT = 555555;
         const ATTRACT_RANGE = 300;
         const ATTRACT_STRENGTH = 5.0;
         const DAMPING = 0.96;
@@ -380,9 +380,13 @@
             if (isHandDetected) {
                 // Obtener posición actual de la mano
                 const handPos = new THREE.Vector3().setFromMatrixPosition(handMatrix);
+                
+                // Reducir velocidad de seguimiento si está en modo puño (implosión) para facilitar el centrado
+                const followSpeed = (shieldState === 0) ? 0.025 : 0.05;
+
                 // La cámara sigue suavemente a la mano en X e Y
-                camera.position.x += (handPos.x - camera.position.x) * 0.05;
-                camera.position.y += (handPos.y - camera.position.y) * 0.05;
+                camera.position.x += (handPos.x - camera.position.x) * followSpeed;
+                camera.position.y += (handPos.y - camera.position.y) * followSpeed;
             } else {
                 // Volver al centro si no hay mano
                 camera.position.x += (0 - camera.position.x) * 0.05;
