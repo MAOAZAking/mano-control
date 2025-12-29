@@ -97,7 +97,9 @@
         let handDetectedState = false; // Para manejar la transición de pérdida
         let shieldState = 0; // 0: Implosion, 1: Circles, 2: Full
         let explosionFactor = 0; // 0 a 1
+        let squareAlpha = 0.0; // Opacidad del cuadrado
         let isHandDetected = false;
+        let fistTime = 0; // Tiempo mantenido en puño
         let time = 0;
 
         // Elementos DOM
@@ -266,11 +268,31 @@
             const v = new THREE.Vector3();
             const targetPos = new THREE.Vector3();
 
+            // Actualizar temporizador de puño
+            if (isHandDetected && shieldState === 0) {
+                fistTime += 0.015;
+            } else {
+                fistTime = 0;
+            }
+
             // Manejo de Invocación / Explosión
             if (!isHandDetected) {
                 explosionFactor = Math.min(1.0, explosionFactor + 0.02); // Se van dispersando
             } else {
-                explosionFactor = Math.max(0.0, explosionFactor - 0.06); // TIEMPO: Aumenta este número para que la animación termine antes
+                // Si está en puño y ya pasó el tiempo de compresión, dispersar (liberar energía)
+                if (shieldState === 0 && fistTime > 0.9) {
+                    explosionFactor = Math.min(1.0, explosionFactor + 0.04);
+                } else {
+                    explosionFactor = Math.max(0.0, explosionFactor - 0.06); // TIEMPO: Aumenta este número para que la animación termine antes
+                }
+            }
+
+            // Transición suave del Cuadrado (1.35 segundos para desaparecer)
+            const targetSquareAlpha = (shieldState === 2) ? 1.0 : 0.0;
+            if (squareAlpha < targetSquareAlpha) {
+                squareAlpha = Math.min(targetSquareAlpha, squareAlpha + 0.05); // Aparecer rápido
+            } else if (squareAlpha > targetSquareAlpha) {
+                squareAlpha = Math.max(targetSquareAlpha, squareAlpha - 0.0123); // Desaparecer en 1.35s
             }
 
             // Rotación global del mandala
@@ -307,7 +329,7 @@
                 if (shieldState === 0) { // Implosión / Puño cerrado
                     localScale = 0.0;
                 } else if (shieldState === 1) { // Círculos (Shaka)
-                    if (type === 1) localScale = 0.0; // Ocultar cuadrado
+                    if (type === 1) localScale = 1.0; // Mantener tamaño mientras se desvanece
                 }
                 // Estado 2 (Full) muestra todo
 
@@ -365,13 +387,19 @@
                 let brightness = 1.0 - explosionFactor;
 
                 // En modo puño, ocultar partículas fuera del radio de 5px
-                if (shieldState === 0) {
+                // Solo si estamos en la fase de compresión (antes de dispersar)
+                if (shieldState === 0 && fistTime <= 0.5) {
                     const distSq = (positions[ix] - targetPos.x)**2 + 
                                  (positions[iy] - targetPos.y)**2 + 
                                  (positions[iz] - targetPos.z)**2;
                     if (distSq > 25.0) { // 5^2 = 25
                         brightness = 0.0;
                     }
+                }
+
+                // Aplicar opacidad al cuadrado
+                if (type === 1) {
+                    brightness *= squareAlpha;
                 }
 
                 const speed = v.length() * 0.02;
