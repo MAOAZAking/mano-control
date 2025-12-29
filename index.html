@@ -97,7 +97,7 @@
         // 0: Esperando manos juntas (Prayer)
         // 1: Separando verticalmente (Creando Vara)
         // 2: Vara lista, esperando Pinch para rotar
-        // 3: Rotando 180 (Creando Círculos)
+            // 3: Rotando (Creando Círculos)
         // 4: Regresando al centro (Creando Rectángulos internos)
         // 5: Separando horizontalmente (Creando Cuadrado y Rayos)
         // 6: Cuadrado listo, esperando rotación de manos
@@ -206,7 +206,7 @@
                 void main() {
                     vColor = color;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = (600.0 / -mvPosition.z); 
+                    gl_PointSize = (1200.0 / -mvPosition.z); // Puntos más grandes para mejor visibilidad
                     gl_Position = projectionMatrix * mvPosition;
                 }
             `;
@@ -259,7 +259,7 @@
                 // Variables temporales para posición
                 let px = 0, py = 0, pz = 0;
                 let visible = false;
-                let noise = (Math.random() - 0.5) * 2.0; // Ruido ligero para efecto eléctrico
+                let noise = (Math.random() - 0.5) * 5.0; // Más ruido/grosor
 
                 // --- LÓGICA DE FORMAS ---
                 
@@ -272,12 +272,16 @@
                         const t = (i % 5000) / 5000.0; // 0 a 1
                         const yLocal = (t - 0.5) * 2.0 * h;
                         
+                        // Añadir grosor a la vara
+                        const thickness = 8.0; 
+                        const xLocal = (Math.random() - 0.5) * thickness;
+
                         // Rotar la vara según staffAngle
                         const cosR = Math.cos(animValues.staffAngle);
                         const sinR = Math.sin(animValues.staffAngle);
                         
-                        px = -yLocal * sinR + noise;
-                        py = yLocal * cosR + noise;
+                        px = (xLocal * cosR - yLocal * sinR) + noise;
+                        py = (xLocal * sinR + yLocal * cosR) + noise;
                         pz = (Math.random() - 0.5) * 5;
                     }
                 }
@@ -487,7 +491,7 @@
             // STEP 0: PRAYER (Manos juntas)
             if (currentStep === 0) {
                 msg = "1) Junta las manos (🙏)";
-                if (dist < 60) {
+                if (dist < 120) { // Umbral más tolerante
                     currentStep = 1;
                 }
             }
@@ -497,10 +501,10 @@
                 msg = "2) Separa una mano arriba y otra abajo";
                 // Mapear distancia vertical a altura de vara
                 // Max height deseada ~300
-                let targetH = Math.min(300, dy * 1.2);
+                let targetH = Math.min(350, dy * 1.5); // Factor aumentado para que crezca más rápido
                 animValues.staffHeight += (targetH - animValues.staffHeight) * 0.1;
 
-                if (animValues.staffHeight > 250) {
+                if (animValues.staffHeight > 200) { // Umbral reducido para facilitar avance
                     currentStep = 2;
                 }
             }
@@ -613,7 +617,7 @@
             }
 
             instructionEl.innerHTML = msg;
-            debugEl.innerHTML = `Step: ${currentStep} | Dist: ${Math.round(dist)} | H: ${Math.round(animValues.staffHeight)}`;
+            debugEl.innerHTML = `Paso: ${currentStep} | Sep: ${Math.round(dy)} | Altura Vara: ${Math.round(animValues.staffHeight)}`;
         }
 
         // --- MEDIAPIPE HANDS ---
