@@ -271,6 +271,7 @@
                 explosionFactor = Math.min(1.0, explosionFactor + 0.02); // Se van dispersando
             } else {
                 explosionFactor = Math.max(0.0, explosionFactor - 0.01); // Llegan poco a poco (Invocación)
+                explosionFactor = Math.max(0.0, explosionFactor - 0.04); // Llegan RÁPIDO (Invocación)
             }
 
             // Rotación global del mandala
@@ -341,6 +342,8 @@
                 // Si estamos en invocación (explosionFactor > 0), attractStrength puede ser menor para que lleguen suave
                 let attractStrength = (shieldState === 0) ? 0.5 : 0.15;
                 if (explosionFactor > 0) attractStrength = 0.1; // Llegada suave
+                let attractStrength = (shieldState === 0) ? 0.5 : 0.25;
+                if (explosionFactor > 0) attractStrength = 0.4; // Llegada rápida
                 
                 const forceX = (targetPos.x - p.x) * attractStrength;
                 const forceY = (targetPos.y - p.y) * attractStrength;
