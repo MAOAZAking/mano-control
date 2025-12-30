@@ -121,7 +121,8 @@
             detailsAlpha: 0,
             tailTip: new THREE.Vector3(150, -150, 0), // Posición punta de cola
             lifePulse: 0,
-            pushEffect: 0 // Efecto de explosión al dar vida
+            pushEffect: 0, // Efecto de explosión al dar vida
+            tailWag: 0 // Movimiento de la cola
         };
 
         // Datos de manos
@@ -130,6 +131,9 @@
         let handSize = 0; // Para detectar el "empujón" (acercamiento)
         let prevHandSize = 0;
         let isHandDetected = false;
+        let handsDetectedCount = 0;
+        let isPinchingLeft = false;
+        let isPinchingRight = false;
         let fingers = { left: [], right: [] }; // Estado de dedos
         let time = 0;
 
@@ -385,7 +389,7 @@
                         const endY = anim.tailTip.y;
                         
                         // Punto de control para curva (S-shape)
-                        const cpX = (startX + endX) / 2 + Math.sin(time * 3) * 50;
+                        const cpX = (startX + endX) / 2 + anim.tailWag;
                         const cpY = Math.min(startY, endY) - 50;
 
                         const t = (i % 1000) / 1000.0; // Progreso en curva
@@ -568,15 +572,16 @@
 
             // STEP 0 -> 1: CARA (Juntar manos)
             if (currentStep === 0) {
-                msg = "1) Junta las manos para crear la ESENCIA (Cara)";
-                if (dist < 150) { // Tolerancia aumentada
+                msg = "1) Pellizca con ambas manos (👌) y júntalas (Cara)";
+                // Requiere pellizco y cercanía
+                if (isPinchingLeft && isPinchingRight && dist < 200) {
                     currentStep = 1;
                 }
             }
             
             // STEP 1 -> 2: OREJAS (Separar arriba)
             else if (currentStep === 1) {
-                msg = "2) Separa las manos hacia ARRIBA (Orejas)";
+                msg = "2) Separa las manos hacia ARRIBA (Orejas)"; 
                 if (dist > 150 && dy > 50) {
                     currentStep = 2;
                 }
@@ -584,27 +589,84 @@
 
             // STEP 2 -> 3: CUERPO (Bajar manos)
             else if (currentStep === 2) {
-                msg = "3) Baja las manos para formar el CUERPO";
-                if (dy < -50) {
-                    currentStep = 3;
+                msg = "3) Pellizca y baja las manos para crear el CUERPO";
+                
+                // El cuerpo aparece a medida que bajas las manos (dy va de +100 a -100 aprox)
+                if (isPinchingLeft && isPinchingRight) {
+                    // Mapear posición vertical a opacidad (Progreso)
+                    // 100 (Arriba) -> 0.0 | -100 (Abajo) -> 1.0
+                    let progress = (100 - dy) / 200;
+                    anim.bodyAlpha = Math.max(0, Math.min(1, progress));
+
+                    if (dy < -80) {
+                        currentStep = 3;
+                        anim.bodyAlpha = 1.0; // Asegurar completo
+                    }
                 }
             }
 
             // STEP 3 -> 4: COLA (Mover una mano al lado)
             else if (currentStep === 3) {
-                msg = "4) Usa UNA mano para dibujar la COLA";
-                if (Math.abs(hand1.x) > 200 || Math.abs(hand2.x) > 200) {
-                    currentStep = 4;
+                msg = "4) Usa UNA SOLA mano: Pellizca y estira (Cola)";
+                
+                if (handsDetectedCount === 1) {
+                    const isPinching = isPinchingLeft || isPinchingRight;
+                    if (isPinching) {
+                        // La cola aparece progresivamente mientras mantienes el gesto
+                        anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.03);
+                        
+                        // La punta de la cola sigue a la mano activa
+                        const activeHand = (Math.abs(hand1.x) > Math.abs(hand2.x)) ? hand1 : hand2;
+                        anim.tailTip.lerp(activeHand, 0.2);
+
+                        if (anim.tailAlpha >= 0.95) {
+                            currentStep = 4;
+                        }
+                    }
+                } else if (handsDetectedCount > 1) {
+                    msg = "⚠️ ¡Solo UNA mano para la cola!";
+                }
+                
+                // Asegurar que no se mueva sola mientras se forma
+                anim.tailWag = 0;
+            }
+
+            // --- LÓGICA DE COLA (Post-Formación) ---
+            if (currentStep >= 4) {
+                // Base de la cola (aproximada según bodyY y bodyRadY)
+                const tailBase = new THREE.Vector3(0, -205, 0);
+                let isControllingTail = false;
+
+                // Si hay solo 1 mano y solo el dedo índice levantado
+                if (handsDetectedCount === 1) {
+                    // fingers.left es igual a fingers.right cuando hay 1 mano (por lógica de espejo en onResults)
+                    const fList = fingers.left; 
+                    const count = fList.filter(f => f).length;
+                    const isIndexOnly = (count === 1 && fList[1]); // Índice es el índice 1
+
+                    if (isIndexOnly) {
+                        isControllingTail = true;
+                        // La cola sigue al dedo (hand1 es el centro, aproximamos)
+                        const dir = new THREE.Vector3().subVectors(hand1, tailBase);
+                        const len = dir.length();
+                        const maxLen = 300; // Limitación de longitud
+                        if (len > maxLen) dir.normalize().multiplyScalar(maxLen);
+                        
+                        const target = new THREE.Vector3().addVectors(tailBase, dir);
+                        anim.tailTip.lerp(target, 0.1);
+                        anim.tailWag = 0; // No se mueve sola si la controlas
+                    }
+                }
+
+                if (!isControllingTail) {
+                    // Movimiento aleatorio / libre
+                    anim.tailWag = Math.sin(time * 3) * 50;
                 }
             }
 
             // STEP 4 -> 5: BIGOTES (Gesto 3 dedos)
             else if (currentStep === 4) {
                 msg = "5) Haz gesto de 3 DEDOS con ambas manos (Bigotes)";
-                
-                // La cola sigue a la mano más alejada
-                const activeHand = (Math.abs(hand1.x) > Math.abs(hand2.x)) ? hand1 : hand2;
-                anim.tailTip.lerp(activeHand, 0.1);
 
                 // Detectar gesto 3 dedos
                 const countFingers = (fList) => fList.filter(f => f).length;
@@ -634,12 +696,12 @@
                 if (anim.pushEffect < 1.0 && anim.detailsAlpha < 0.5) {
                     anim.pushEffect += 0.1;
                 } else {
-                    anim.pushEffect = Math.max(0, anim.pushEffect - 0.02);
+                    anim.pushEffect = Math.max(0, anim.pushEffect - 0.05);
                 }
 
                 // Aparecer gato real
                 if (catPlane) {
-                    catPlane.material.opacity = Math.min(1, catPlane.material.opacity + 0.01);
+                    catPlane.material.opacity = Math.min(1, catPlane.material.opacity + 0.05);
                 }
             }
 
@@ -647,8 +709,8 @@
             // Esto asegura que las partes anteriores sigan visibles y apareciendo
             if (currentStep >= 1) anim.faceAlpha = Math.min(1, anim.faceAlpha + 0.05);
             if (currentStep >= 2) anim.earsAlpha = Math.min(1, anim.earsAlpha + 0.05);
-            if (currentStep >= 3) anim.bodyAlpha = Math.min(1, anim.bodyAlpha + 0.05);
-            if (currentStep >= 4) anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.05);
+            if (currentStep >= 3) anim.bodyAlpha = Math.min(1, anim.bodyAlpha + 0.05); // Mantener visible después del paso 2
+            if (currentStep >= 4) anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.05); // Mantener visible después del paso 3
             if (currentStep >= 5) anim.whiskersAlpha = Math.min(1, anim.whiskersAlpha + 0.05);
             if (currentStep >= 6) anim.detailsAlpha = Math.min(1, anim.detailsAlpha + 0.05);
 
@@ -663,6 +725,7 @@
             loadingEl.style.display = 'none';
             videoContainer.style.display = 'block';
 
+            handsDetectedCount = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 isHandDetected = true;
                 
@@ -692,6 +755,13 @@
                     return open;
                 };
 
+                // Helper Pellizco (Distancia Pulgar-Índice)
+                const checkPinch = (lm) => {
+                    const p4 = getPos(lm, 4);
+                    const p8 = getPos(lm, 8);
+                    return p4.distanceTo(p8) < 60;
+                };
+
                 // Procesar manos
                 let h1L = results.multiHandLandmarks[0];
                 let h2L = (results.multiHandLandmarks.length > 1) ? results.multiHandLandmarks[1] : h1L;
@@ -706,11 +776,15 @@
                     hand2.lerp(p2, 0.5);
                     fingers.left = checkFingers(h1L);
                     fingers.right = checkFingers(h2L);
+                    isPinchingLeft = checkPinch(h1L);
+                    isPinchingRight = checkPinch(h2L);
                 } else {
                     hand1.lerp(p2, 0.5);
                     hand2.lerp(p1, 0.5);
                     fingers.left = checkFingers(h2L);
                     fingers.right = checkFingers(h1L);
+                    isPinchingLeft = checkPinch(h2L);
+                    isPinchingRight = checkPinch(h1L);
                 }
 
                 // Calcular tamaño de mano (para detectar empujón/profundidad relativa)
@@ -722,6 +796,8 @@
 
             } else {
                 isHandDetected = false;
+                isPinchingLeft = false;
+                isPinchingRight = false;
             }
         }
 
