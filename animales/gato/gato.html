@@ -265,9 +265,11 @@
             const cGold = new THREE.Color(0xffaa00);
 
             // Parámetros Geométricos
-            const faceY = 110; // Ajustado para coincidir con gato.png
+            const faceX = -50; // Cabeza desplazada a la izquierda
+            const faceY = 110; 
             const faceRad = 95;
-            const bodyY = -90; // Ajustado para coincidir con gato.png
+            const bodyX = 40; // Cuerpo desplazado a la derecha
+            const bodyY = -90; 
             const bodyRadX = 105;
             const bodyRadY = 135;
 
@@ -290,7 +292,7 @@
                         const angle = rnd * Math.PI * 2;
                         // Anillo grueso
                         const r = faceRad + (Math.random() - 0.5) * 10; 
-                        px = r * Math.cos(angle);
+                        px = faceX + r * Math.cos(angle);
                         py = faceY + r * Math.sin(angle);
                     }
                 }
@@ -301,7 +303,7 @@
                         visible = true;
                         alpha = anim.earsAlpha;
                         // Dos orejas
-                        const isLeft = rnd > 0.5;
+                        const isLeft = (i % 2 === 0); // Corregido: Desacoplar de rnd para evitar triangulo incompleto
                         const side = isLeft ? -1 : 1;
                         
                         // Base en el círculo, punta hacia arriba
@@ -309,9 +311,9 @@
                         const t = (i % 100) / 100.0; // 0 a 1 a lo largo del triángulo
                         // Simplificado: Puntos aleatorios dentro de un triángulo
                         // A: Base externa, B: Base interna, C: Punta
-                        const bx = side * (faceRad * 0.8);
+                        const bx = faceX + side * (faceRad * 0.8);
                         const by = faceY + (faceRad * 0.5);
-                        const tipX = side * (faceRad * 0.5);
+                        const tipX = faceX + side * (faceRad * 0.5);
                         const tipY = faceY + faceRad * 1.5;
                         
                         // Interpolación baricéntrica simple (o líneas)
@@ -326,7 +328,7 @@
                                 px = bx + (tipX - bx) * t;
                                 py = by + (tipY - by) * t;
                             } else { // Lado interno
-                                const ix = side * (faceRad * 0.3);
+                                const ix = faceX + side * (faceRad * 0.3);
                                 const iy = faceY + (faceRad * 0.9);
                                 px = tipX + (ix - tipX) * t;
                                 py = tipY + (iy - tipY) * t;
@@ -349,7 +351,7 @@
                             const rX = bodyRadX + (Math.random()-0.5)*10;
                             const rY = bodyRadY + (Math.random()-0.5)*10;
                             
-                            px = rX * Math.cos(angle);
+                            px = bodyX + rX * Math.cos(angle);
                             py = bodyY + rY * Math.sin(angle);
                             
                             // Recortar parte superior donde conecta con cabeza para que no se superponga feo
@@ -361,7 +363,7 @@
                             const pawSign = isLeft ? -1 : 1;
                             
                             // Posición de las patas (abajo del cuerpo)
-                            const pawCX = pawSign * 45; 
+                            const pawCX = bodyX + pawSign * 45; 
                             const pawCY = bodyY - bodyRadY + 35; 
                             
                             const pAngle = subRnd * Math.PI * 10; // Relleno aleatorio
@@ -382,7 +384,7 @@
                         
                         // Origen: Base del cuerpo (lado derecho o izquierdo según mano)
                         // Usamos anim.tailTip como destino
-                        const startX = 0; 
+                        const startX = bodyX + 80; // Cola sale del lado derecho
                         const startY = bodyY - bodyRadY + 20;
                         
                         const endX = anim.tailTip.x;
@@ -414,7 +416,7 @@
                         const side = isLeft ? -1 : 1;
                         const whiskerIdx = Math.floor(rnd * 10) % 3; // 3 bigotes por lado
                         
-                        const startX = side * 20;
+                        const startX = faceX + side * 20;
                         const startY = faceY - 10;
                         
                         // Ángulos: 0, 15, -15 grados
@@ -443,7 +445,7 @@
                         
                         if (part < 4) { // Ojos
                             const isLeft = part < 2;
-                            const ex = (isLeft ? -35 : 35);
+                            const ex = faceX + (isLeft ? -35 : 35);
                             const ey = faceY + 10;
                             // Forma de ojo (elipse pequeña)
                             const ang = rnd * Math.PI * 2;
@@ -456,7 +458,7 @@
                                 color = new THREE.Color(0x000000); // Pupila negra (simulada por contraste o hueco)
                             }
                         } else if (part < 7) { // Nariz
-                            const nx = 0;
+                            const nx = faceX;
                             const ny = faceY - 15;
                             // Triángulo invertido pequeño
                             px = nx + (Math.random()-0.5)*15;
@@ -465,7 +467,7 @@
                         } else { // Boca
                             // W shape
                             const t = rnd; // 0 a 1
-                            const bx = (t - 0.5) * 40;
+                            const bx = faceX + (t - 0.5) * 40;
                             const by = faceY - 35 + Math.abs(Math.sin(t * Math.PI * 2)) * 5;
                             px = bx; py = by;
                         }
@@ -634,7 +636,7 @@
             // --- LÓGICA DE COLA (Post-Formación) ---
             if (currentStep >= 4) {
                 // Base de la cola (aproximada según bodyY y bodyRadY)
-                const tailBase = new THREE.Vector3(0, -205, 0);
+                const tailBase = new THREE.Vector3(120, -205, 0); // bodyX(40) + offset(80)
                 let isControllingTail = false;
 
                 // Si hay solo 1 mano y solo el dedo índice levantado
