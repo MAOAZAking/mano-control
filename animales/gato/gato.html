@@ -614,20 +614,21 @@
 
             // STEP 3 -> 4: COLA (Mover una mano al lado)
             else if (currentStep === 3) {
-                msg = "4) Usa UNA SOLA mano: Pellizca y estira (Cola)";
+                msg = "4) Usa UNA mano: Pellizca para dibujar la cola. Suelta para terminar.";
                 
                 if (handsDetectedCount === 1) {
                     const isPinching = isPinchingLeft || isPinchingRight;
                     if (isPinching) {
-                        // La cola aparece progresivamente mientras mantienes el gesto
-                        anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.03);
+                        // Dibujando: La cola aparece y sigue la mano
+                        anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.05);
                         
                         // La punta de la cola sigue a la mano activa
                         const activeHand = (Math.abs(hand1.x) > Math.abs(hand2.x)) ? hand1 : hand2;
                         anim.tailTip.lerp(activeHand, 0.2);
-
-                        if (anim.tailAlpha >= 0.95) {
-                            currentStep = 4;
+                    } else {
+                        // Si soltamos el pellizco y ya se dibujó algo, terminamos
+                        if (anim.tailAlpha > 0.5) {
+                             currentStep = 4;
                         }
                     }
                 } else if (handsDetectedCount > 1) {
@@ -673,14 +674,15 @@
 
             // STEP 4 -> 5: BIGOTES (Gesto 3 dedos)
             else if (currentStep === 4) {
-                msg = "5) Haz gesto de 3 DEDOS con ambas manos (Bigotes)";
+                msg = "5) Muestra las 2 manos y muestra 3 dedos y estira hacia afuera con los 3 dedos para hacer los bigotes";
 
                 // Detectar gesto 3 dedos
                 const countFingers = (fList) => fList.filter(f => f).length;
                 const f1 = countFingers(fingers.left);
                 const f2 = countFingers(fingers.right);
                 
-                if (f1 === 3 && f2 === 3) {
+                // Relajamos la condición: Al menos 3 dedos en cada mano (y que haya 2 manos)
+                if (handsDetectedCount === 2 && f1 >= 3 && f2 >= 3) {
                     currentStep = 5;
                 }
             }
