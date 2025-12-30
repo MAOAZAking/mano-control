@@ -41,7 +41,7 @@
             opacity: 0.7;
             border: 1px solid #333;
             transform: scaleX(-1); /* Efecto espejo */
-            display: none;
+            display: block; /* Mostrar siempre para facilitar ubicación */
         }
         video {
             width: 100%;
@@ -156,6 +156,7 @@
             createParticles();
             createRealCat();
             window.addEventListener('resize', onWindowResize);
+            camera.lookAt(0, 0, 0);
             animate();
         }
 
@@ -223,6 +224,7 @@
             });
 
             particles = new THREE.Points(geometry, material);
+            particles.frustumCulled = false; // IMPORTANTE: Evita que desaparezcan al moverse
             scene.add(particles);
         }
 
@@ -457,6 +459,20 @@
                         py = target.y + noise * 5;
                         pz = target.z;
                     }
+                }
+
+                // --- 7: AURA / AMBIENTE (Siempre visible) ---
+                else if (id === 7) {
+                    visible = true;
+                    alpha = 0.2 + Math.sin(time * 0.5 + i) * 0.1;
+                    color = cPurple;
+                    
+                    // Movimiento flotante suave
+                    const theta = rnd * Math.PI * 2;
+                    const r = 300 + Math.sin(time * 0.2 + rnd * 10) * 50;
+                    px = r * Math.cos(theta);
+                    py = r * Math.sin(theta) * 0.8; // Más achatado
+                    pz = (randoms[(i+1)%PARTICLE_COUNT] - 0.5) * 200;
                 }
 
                 // --- EFECTO DE VIDA (PUSH) ---
