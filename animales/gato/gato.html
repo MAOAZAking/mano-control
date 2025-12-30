@@ -261,11 +261,11 @@
             const cGold = new THREE.Color(0xffaa00);
 
             // Parámetros Geométricos
-            const faceY = 100;
-            const faceRad = 90;
-            const bodyY = -80;
-            const bodyRadX = 100;
-            const bodyRadY = 130;
+            const faceY = 110; // Ajustado para coincidir con gato.png
+            const faceRad = 95;
+            const bodyY = -90; // Ajustado para coincidir con gato.png
+            const bodyRadX = 105;
+            const bodyRadY = 135;
 
             for (let i = 0; i < PARTICLE_COUNT; i++) {
                 const ix = i * 3;
@@ -337,17 +337,36 @@
                     if (anim.bodyAlpha > 0.01) {
                         visible = true;
                         alpha = anim.bodyAlpha;
-                        const angle = rnd * Math.PI * 2;
-                        // Solo arco inferior (de -30 a 210 grados aprox, o todo el óvalo)
-                        // El cuerpo está debajo de la cabeza
-                        const rX = bodyRadX + (Math.random()-0.5)*10;
-                        const rY = bodyRadY + (Math.random()-0.5)*10;
                         
-                        px = rX * Math.cos(angle);
-                        py = bodyY + rY * Math.sin(angle);
-                        
-                        // Recortar parte superior donde conecta con cabeza
-                        if (py > faceY - 40) visible = false;
+                        // Dividir partículas: 85% Cuerpo, 15% Patas
+                        if (rnd < 0.85) {
+                            // --- CUERPO PRINCIPAL ---
+                            const angle = (rnd / 0.85) * Math.PI * 2;
+                            const rX = bodyRadX + (Math.random()-0.5)*10;
+                            const rY = bodyRadY + (Math.random()-0.5)*10;
+                            
+                            px = rX * Math.cos(angle);
+                            py = bodyY + rY * Math.sin(angle);
+                            
+                            // Recortar parte superior donde conecta con cabeza para que no se superponga feo
+                            if (py > faceY - 40) visible = false;
+                        } else {
+                            // --- PATAS DELANTERAS (Se forman con el cuerpo) ---
+                            const subRnd = (rnd - 0.85) / 0.15; // Normalizar 0 a 1
+                            const isLeft = subRnd > 0.5;
+                            const pawSign = isLeft ? -1 : 1;
+                            
+                            // Posición de las patas (abajo del cuerpo)
+                            const pawCX = pawSign * 45; 
+                            const pawCY = bodyY - bodyRadY + 35; 
+                            
+                            const pAngle = subRnd * Math.PI * 10; // Relleno aleatorio
+                            const prX = 28 + Math.random()*5; // Ancho pata
+                            const prY = 18 + Math.random()*5; // Alto pata
+                            
+                            px = pawCX + prX * Math.cos(pAngle);
+                            py = pawCY + prY * Math.sin(pAngle);
+                        }
                     }
                 }
 
