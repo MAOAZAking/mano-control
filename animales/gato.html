@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gato Místico de Partículas</title>
+    <title>Dibujar Gato Con Las Manos</title>
     <style>
         body {
             margin: 0;
@@ -79,7 +79,7 @@
 <body>
 
     <div id="loading">
-        Invocando Espíritu Felino...<br>
+        Para empezar necesitamos acceso a tu cámara...<br>
         <small>Por favor permite el acceso a la cámara</small>
     </div>
 
@@ -199,7 +199,7 @@
                 void main() {
                     vColor = color;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = (4000.0 / -mvPosition.z);
+                    gl_PointSize = (6000.0 / -mvPosition.z); // Aumentado para mejor visibilidad
                     gl_Position = projectionMatrix * mvPosition;
                 }
             `;
@@ -504,10 +504,12 @@
             const dy = (hand1.y + hand2.y) / 2; // Altura promedio
             let msg = "";
 
+            // --- GESTIÓN DE ESTADOS ---
+
             // STEP 0 -> 1: CARA (Juntar manos)
             if (currentStep === 0) {
                 msg = "1) Junta las manos para crear la ESENCIA (Cara)";
-                if (dist < 100) {
+                if (dist < 150) { // Tolerancia aumentada
                     currentStep = 1;
                 }
             }
@@ -515,8 +517,6 @@
             // STEP 1 -> 2: OREJAS (Separar arriba)
             else if (currentStep === 1) {
                 msg = "2) Separa las manos hacia ARRIBA (Orejas)";
-                anim.faceAlpha = Math.min(1, anim.faceAlpha + 0.05);
-                
                 if (dist > 150 && dy > 50) {
                     currentStep = 2;
                 }
@@ -525,8 +525,6 @@
             // STEP 2 -> 3: CUERPO (Bajar manos)
             else if (currentStep === 2) {
                 msg = "3) Baja las manos para formar el CUERPO";
-                anim.earsAlpha = Math.min(1, anim.earsAlpha + 0.05);
-                
                 if (dy < -50) {
                     currentStep = 3;
                 }
@@ -535,9 +533,6 @@
             // STEP 3 -> 4: COLA (Mover una mano al lado)
             else if (currentStep === 3) {
                 msg = "4) Usa UNA mano para dibujar la COLA";
-                anim.bodyAlpha = Math.min(1, anim.bodyAlpha + 0.05);
-                
-                // Detectar si una mano se aleja mucho del centro en X
                 if (Math.abs(hand1.x) > 200 || Math.abs(hand2.x) > 200) {
                     currentStep = 4;
                 }
@@ -546,14 +541,12 @@
             // STEP 4 -> 5: BIGOTES (Gesto 3 dedos)
             else if (currentStep === 4) {
                 msg = "5) Haz gesto de 3 DEDOS con ambas manos (Bigotes)";
-                anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.05);
                 
                 // La cola sigue a la mano más alejada
                 const activeHand = (Math.abs(hand1.x) > Math.abs(hand2.x)) ? hand1 : hand2;
                 anim.tailTip.lerp(activeHand, 0.1);
 
-                // Detectar gesto 3 dedos (Índice, Medio, Anular abiertos; Meñique cerrado)
-                // Simplificado: Si hay 3 dedos levantados en cada mano
+                // Detectar gesto 3 dedos
                 const countFingers = (fList) => fList.filter(f => f).length;
                 const f1 = countFingers(fingers.left);
                 const f2 = countFingers(fingers.right);
@@ -566,14 +559,9 @@
             // STEP 5 -> 6: VIDA (Empujón)
             else if (currentStep === 5) {
                 msg = "6) ¡ACÉRCATE BRUSCAMENTE para darle VIDA!";
-                anim.whiskersAlpha = Math.min(1, anim.whiskersAlpha + 0.05);
                 
-                // Detectar empujón (Aumento rápido de tamaño de mano)
-                // handSize se calcula en onResults
                 const deltaSize = handSize - prevHandSize;
-                
-                // Umbral de velocidad de acercamiento
-                if (deltaSize > 5.0) { // Ajustar sensibilidad
+                if (deltaSize > 5.0) { 
                     currentStep = 6;
                 }
             }
@@ -581,15 +569,23 @@
             // STEP 6: FINAL
             else if (currentStep === 6) {
                 msg = "¡MIAU! El Gato Místico vive.";
-                anim.detailsAlpha = Math.min(1, anim.detailsAlpha + 0.05);
                 
-                // Efecto de explosión inicial que se desvanece
+                // Efecto de explosión inicial
                 if (anim.pushEffect < 1.0 && anim.detailsAlpha < 0.5) {
                     anim.pushEffect += 0.1;
                 } else {
                     anim.pushEffect = Math.max(0, anim.pushEffect - 0.02);
                 }
             }
+
+            // --- ACTUALIZACIÓN DE ANIMACIONES (Acumulativo) ---
+            // Esto asegura que las partes anteriores sigan visibles y apareciendo
+            if (currentStep >= 1) anim.faceAlpha = Math.min(1, anim.faceAlpha + 0.05);
+            if (currentStep >= 2) anim.earsAlpha = Math.min(1, anim.earsAlpha + 0.05);
+            if (currentStep >= 3) anim.bodyAlpha = Math.min(1, anim.bodyAlpha + 0.05);
+            if (currentStep >= 4) anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.05);
+            if (currentStep >= 5) anim.whiskersAlpha = Math.min(1, anim.whiskersAlpha + 0.05);
+            if (currentStep >= 6) anim.detailsAlpha = Math.min(1, anim.detailsAlpha + 0.05);
 
             instructionEl.innerHTML = msg;
             debugEl.innerHTML = `Paso: ${currentStep} | Dist: ${Math.round(dist)} | Dedos: ${fingers.left.filter(x=>x).length}/${fingers.right.filter(x=>x).length}`;
