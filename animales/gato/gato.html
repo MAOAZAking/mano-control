@@ -265,13 +265,13 @@
             const cGold = new THREE.Color(0xffaa00);
 
             // Parámetros Geométricos
-            const faceX = -50; // Cabeza desplazada a la izquierda
-            const faceY = 110; 
-            const faceRad = 95;
-            const bodyX = 40; // Cuerpo desplazado a la derecha
-            const bodyY = -90; 
-            const bodyRadX = 105;
-            const bodyRadY = 135;
+            const faceX = -40; // Ajustado a la imagen
+            const faceY = 100; 
+            const faceRad = 90;
+            const bodyX = 30; // Ajustado a la imagen
+            const bodyY = -80; 
+            const bodyRadX = 100;
+            const bodyRadY = 130;
 
             for (let i = 0; i < PARTICLE_COUNT; i++) {
                 const ix = i * 3;
@@ -351,8 +351,13 @@
                             const rX = bodyRadX + (Math.random()-0.5)*10;
                             const rY = bodyRadY + (Math.random()-0.5)*10;
                             
-                            px = bodyX + rX * Math.cos(angle);
-                            py = bodyY + rY * Math.sin(angle);
+                            // Forma de pera (más ancho abajo) para coincidir con el gato sentado
+                            let rawPx = rX * Math.cos(angle);
+                            let rawPy = rY * Math.sin(angle);
+                            let widthFactor = 1.0 - ((rawPy / rY) * 0.2 + 0.1); // Estrechar arriba
+                            
+                            px = bodyX + rawPx * widthFactor;
+                            py = bodyY + rawPy;
                             
                             // Recortar parte superior donde conecta con cabeza para que no se superponga feo
                             if (py > faceY - 40) visible = false;
@@ -363,7 +368,7 @@
                             const pawSign = isLeft ? -1 : 1;
                             
                             // Posición de las patas (abajo del cuerpo)
-                            const pawCX = bodyX + pawSign * 45; 
+                            const pawCX = bodyX + pawSign * 40; 
                             const pawCY = bodyY - bodyRadY + 35; 
                             
                             const pAngle = subRnd * Math.PI * 10; // Relleno aleatorio
@@ -384,7 +389,7 @@
                         
                         // Origen: Base del cuerpo (lado derecho o izquierdo según mano)
                         // Usamos anim.tailTip como destino
-                        const startX = bodyX + 80; // Cola sale del lado derecho
+                        const startX = bodyX + 70; // Cola sale del lado derecho
                         const startY = bodyY - bodyRadY + 20;
                         
                         const endX = anim.tailTip.x;
@@ -636,7 +641,7 @@
             // --- LÓGICA DE COLA (Post-Formación) ---
             if (currentStep >= 4) {
                 // Base de la cola (aproximada según bodyY y bodyRadY)
-                const tailBase = new THREE.Vector3(120, -205, 0); // bodyX(40) + offset(80)
+                const tailBase = new THREE.Vector3(100, -195, 0); // bodyX(30) + offset(70)
                 let isControllingTail = false;
 
                 // Si hay solo 1 mano y solo el dedo índice levantado
