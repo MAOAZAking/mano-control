@@ -1,0 +1,700 @@
+<!-- /workspaces/mano-control/gato.html -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gato Místico de Partículas</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        canvas {
+            display: block;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ccff;
+            font-size: 24px;
+            text-align: center;
+            pointer-events: none;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border: 1px solid #00ccff;
+            border-radius: 8px;
+            transition: opacity 0.5s;
+        }
+        #video-container {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            width: 160px;
+            height: 120px;
+            z-index: 5;
+            opacity: 0.7;
+            border: 1px solid #333;
+            transform: scaleX(-1); /* Efecto espejo */
+            display: none;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            background: rgba(0,0,0,0.6);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            max-width: 350px;
+            border: 1px solid #444;
+        }
+        #instruction {
+            font-weight: bold;
+            color: #00ccff;
+            margin-bottom: 5px;
+            font-size: 16px;
+        }
+    </style>
+    
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loading">
+        Invocando Espíritu Felino...<br>
+        <small>Por favor permite el acceso a la cámara</small>
+    </div>
+
+    <div id="video-container">
+        <video class="input_video"></video>
+    </div>
+
+    <div class="controls">
+        <div id="instruction">Esperando manos...</div>
+        <small id="debug-info" style="color: #aaa;"></small>
+    </div>
+
+    <script>
+        // --- CONFIGURACIÓN ---
+        const PARTICLE_COUNT = 60000;
+        
+        // --- VARIABLES GLOBALES ---
+        let scene, camera, renderer, particles, geometry, material;
+        let positions, colors;
+        
+        // Estado del Gato
+        let currentStep = 0; 
+        // 0: Inicio (Esperando)
+        // 1: Cara (Círculo)
+        // 2: Orejas (Triángulos)
+        // 3: Cuerpo (Óvalo)
+        // 4: Cola (Curva interactiva)
+        // 5: Bigotes (Líneas)
+        // 6: Vida (Detalles finales + Latido)
+
+        // Animación y Transiciones
+        let anim = {
+            faceAlpha: 0,
+            earsAlpha: 0,
+            bodyAlpha: 0,
+            tailAlpha: 0,
+            whiskersAlpha: 0,
+            detailsAlpha: 0,
+            tailTip: new THREE.Vector3(150, -150, 0), // Posición punta de cola
+            lifePulse: 0,
+            pushEffect: 0 // Efecto de explosión al dar vida
+        };
+
+        // Datos de manos
+        let hand1 = new THREE.Vector3(0,0,0);
+        let hand2 = new THREE.Vector3(0,0,0);
+        let handSize = 0; // Para detectar el "empujón" (acercamiento)
+        let prevHandSize = 0;
+        let isHandDetected = false;
+        let fingers = { left: [], right: [] }; // Estado de dedos
+        let time = 0;
+
+        // Elementos DOM
+        const loadingEl = document.getElementById('loading');
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const videoContainer = document.getElementById('video-container');
+        const instructionEl = document.getElementById('instruction');
+        const debugEl = document.getElementById('debug-info');
+
+        // --- INICIALIZACIÓN THREE.JS ---
+        function initThree() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050505, 0.001);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 3000);
+            camera.position.z = 600;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            createParticles();
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+
+        // --- SISTEMA DE PARTÍCULAS ---
+        function createParticles() {
+            geometry = new THREE.BufferGeometry();
+            positions = new Float32Array(PARTICLE_COUNT * 3);
+            colors = new Float32Array(PARTICLE_COUNT * 3);
+            const shapeIds = new Float32Array(PARTICLE_COUNT);
+            const randoms = new Float32Array(PARTICLE_COUNT); // Para variaciones
+
+            let idx = 0;
+            const assignRange = (count, id) => {
+                for(let i=0; i<count; i++) {
+                    if(idx >= PARTICLE_COUNT) break;
+                    shapeIds[idx] = id;
+                    randoms[idx] = Math.random();
+                    // Inicializar fuera
+                    positions[idx*3] = 9999;
+                    positions[idx*3+1] = 9999;
+                    positions[idx*3+2] = 0;
+                    idx++;
+                }
+            };
+
+            // Distribución de partículas para las partes del gato
+            assignRange(10000, 0); // Cara (Círculo)
+            assignRange(5000, 1);  // Orejas
+            assignRange(15000, 2); // Cuerpo (Óvalo)
+            assignRange(8000, 3);  // Cola
+            assignRange(6000, 4);  // Bigotes
+            assignRange(5000, 5);  // Detalles (Ojos, Nariz, Boca)
+            assignRange(2000, 6);  // Manos (Guía visual)
+            assignRange(9000, 7);  // Aura / Relleno
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+            geometry.userData = { shapeIds: shapeIds, randoms: randoms };
+
+            const vertexShader = `
+                attribute vec3 color;
+                varying vec3 vColor;
+                void main() {
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = (4000.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `;
+
+            const fragmentShader = `
+                varying vec3 vColor;
+                void main() {
+                    float r = distance(gl_PointCoord, vec2(0.5, 0.5));
+                    if (r > 0.5) discard;
+                    float glow = 1.0 - (r * 2.0);
+                    glow = pow(glow, 2.0);
+                    gl_FragColor = vec4(vColor, glow);
+                }
+            `;
+
+            material = new THREE.ShaderMaterial({
+                vertexShader, fragmentShader,
+                transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+        }
+
+        // --- LÓGICA DE FORMAS Y ANIMACIÓN ---
+        function updateParticles() {
+            const posAttr = geometry.attributes.position;
+            const colAttr = geometry.attributes.color;
+            const shapeIds = geometry.userData.shapeIds;
+            const randoms = geometry.userData.randoms;
+            const pArr = posAttr.array;
+            const cArr = colAttr.array;
+
+            // Colores
+            const cBlue = new THREE.Color(0x00ccff);
+            const cPurple = new THREE.Color(0xaa00ff);
+            const cWhite = new THREE.Color(0xffffff);
+            const cGold = new THREE.Color(0xffaa00);
+
+            // Parámetros Geométricos
+            const faceY = 100;
+            const faceRad = 90;
+            const bodyY = -80;
+            const bodyRadX = 100;
+            const bodyRadY = 130;
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const ix = i * 3;
+                const id = shapeIds[i];
+                const rnd = randoms[i];
+                
+                let px = 0, py = 0, pz = 0;
+                let visible = false;
+                let alpha = 0;
+                let color = cBlue;
+                let noise = (Math.random() - 0.5) * 3;
+
+                // --- 0: CARA (Círculo) ---
+                if (id === 0) {
+                    if (anim.faceAlpha > 0.01) {
+                        visible = true;
+                        alpha = anim.faceAlpha;
+                        const angle = rnd * Math.PI * 2;
+                        // Anillo grueso
+                        const r = faceRad + (Math.random() - 0.5) * 10; 
+                        px = r * Math.cos(angle);
+                        py = faceY + r * Math.sin(angle);
+                    }
+                }
+
+                // --- 1: OREJAS (Triángulos) ---
+                else if (id === 1) {
+                    if (anim.earsAlpha > 0.01) {
+                        visible = true;
+                        alpha = anim.earsAlpha;
+                        // Dos orejas
+                        const isLeft = rnd > 0.5;
+                        const side = isLeft ? -1 : 1;
+                        
+                        // Base en el círculo, punta hacia arriba
+                        // Coordenadas locales de oreja
+                        const t = (i % 100) / 100.0; // 0 a 1 a lo largo del triángulo
+                        // Simplificado: Puntos aleatorios dentro de un triángulo
+                        // A: Base externa, B: Base interna, C: Punta
+                        const bx = side * (faceRad * 0.8);
+                        const by = faceY + (faceRad * 0.5);
+                        const tipX = side * (faceRad * 0.5);
+                        const tipY = faceY + faceRad * 1.5;
+                        
+                        // Interpolación baricéntrica simple (o líneas)
+                        const r1 = Math.random();
+                        const r2 = Math.random();
+                        if (r1 + r2 <= 1) {
+                            // Dentro del triángulo
+                            px = bx + (tipX - bx) * r1 + (0 - 20 * side) * r2; // Aprox
+                            // Mejor: Dibujar contorno
+                            const edge = Math.floor(rnd * 3); // 0: ext, 1: int
+                            if (edge === 0) { // Lado externo
+                                px = bx + (tipX - bx) * t;
+                                py = by + (tipY - by) * t;
+                            } else { // Lado interno
+                                const ix = side * (faceRad * 0.3);
+                                const iy = faceY + (faceRad * 0.9);
+                                px = tipX + (ix - tipX) * t;
+                                py = tipY + (iy - tipY) * t;
+                            }
+                        }
+                        px += noise; py += noise;
+                    }
+                }
+
+                // --- 2: CUERPO (Óvalo) ---
+                else if (id === 2) {
+                    if (anim.bodyAlpha > 0.01) {
+                        visible = true;
+                        alpha = anim.bodyAlpha;
+                        const angle = rnd * Math.PI * 2;
+                        // Solo arco inferior (de -30 a 210 grados aprox, o todo el óvalo)
+                        // El cuerpo está debajo de la cabeza
+                        const rX = bodyRadX + (Math.random()-0.5)*10;
+                        const rY = bodyRadY + (Math.random()-0.5)*10;
+                        
+                        px = rX * Math.cos(angle);
+                        py = bodyY + rY * Math.sin(angle);
+                        
+                        // Recortar parte superior donde conecta con cabeza
+                        if (py > faceY - 40) visible = false;
+                    }
+                }
+
+                // --- 3: COLA (Curva Bezier Interactiva) ---
+                else if (id === 3) {
+                    if (anim.tailAlpha > 0.01) {
+                        visible = true;
+                        alpha = anim.tailAlpha;
+                        
+                        // Origen: Base del cuerpo (lado derecho o izquierdo según mano)
+                        // Usamos anim.tailTip como destino
+                        const startX = 0; 
+                        const startY = bodyY - bodyRadY + 20;
+                        
+                        const endX = anim.tailTip.x;
+                        const endY = anim.tailTip.y;
+                        
+                        // Punto de control para curva (S-shape)
+                        const cpX = (startX + endX) / 2 + Math.sin(time * 3) * 50;
+                        const cpY = Math.min(startY, endY) - 50;
+
+                        const t = (i % 1000) / 1000.0; // Progreso en curva
+                        
+                        // Curva Cuadrática Bezier
+                        const invT = 1 - t;
+                        px = invT*invT*startX + 2*invT*t*cpX + t*t*endX;
+                        py = invT*invT*startY + 2*invT*t*cpY + t*t*endY;
+                        
+                        px += (Math.random()-0.5) * 15; // Grosor peludo
+                        py += (Math.random()-0.5) * 15;
+                    }
+                }
+
+                // --- 4: BIGOTES (Líneas) ---
+                else if (id === 4) {
+                    if (anim.whiskersAlpha > 0.01) {
+                        visible = true;
+                        alpha = anim.whiskersAlpha;
+                        
+                        const isLeft = rnd > 0.5;
+                        const side = isLeft ? -1 : 1;
+                        const whiskerIdx = Math.floor(rnd * 10) % 3; // 3 bigotes por lado
+                        
+                        const startX = side * 20;
+                        const startY = faceY - 10;
+                        
+                        // Ángulos: 0, 15, -15 grados
+                        let ang = (whiskerIdx - 1) * 0.3;
+                        if (isLeft) ang = Math.PI - ang;
+                        
+                        const len = 120;
+                        const t = (i % 100) / 100.0;
+                        
+                        px = startX + Math.cos(ang) * len * t;
+                        py = startY + Math.sin(ang) * len * t;
+                        
+                        // Movimiento sutil "respiración"
+                        py += Math.sin(time * 5 + whiskerIdx) * 2 * t;
+                    }
+                }
+
+                // --- 5: DETALLES (Ojos, Nariz, Boca) ---
+                else if (id === 5) {
+                    if (anim.detailsAlpha > 0.01) {
+                        visible = true;
+                        alpha = anim.detailsAlpha;
+                        color = cGold; // Ojos brillantes
+                        
+                        const part = Math.floor(rnd * 10); // Subdividir
+                        
+                        if (part < 4) { // Ojos
+                            const isLeft = part < 2;
+                            const ex = (isLeft ? -35 : 35);
+                            const ey = faceY + 10;
+                            // Forma de ojo (elipse pequeña)
+                            const ang = rnd * Math.PI * 2;
+                            px = ex + 12 * Math.cos(ang);
+                            py = ey + 8 * Math.sin(ang);
+                            // Pupila vertical (gato)
+                            if (Math.random() > 0.8) {
+                                px = ex + (Math.random()-0.5)*2;
+                                py = ey + (Math.random()-0.5)*12;
+                                color = new THREE.Color(0x000000); // Pupila negra (simulada por contraste o hueco)
+                            }
+                        } else if (part < 7) { // Nariz
+                            const nx = 0;
+                            const ny = faceY - 15;
+                            // Triángulo invertido pequeño
+                            px = nx + (Math.random()-0.5)*15;
+                            py = ny + (Math.random()-0.5)*10;
+                            color = new THREE.Color(0xffaaaa); // Rosado
+                        } else { // Boca
+                            // W shape
+                            const t = rnd; // 0 a 1
+                            const bx = (t - 0.5) * 40;
+                            const by = faceY - 35 + Math.abs(Math.sin(t * Math.PI * 2)) * 5;
+                            px = bx; py = by;
+                        }
+                    }
+                }
+
+                // --- 6: MARCADORES DE MANOS ---
+                else if (id === 6) {
+                    if (isHandDetected) {
+                        visible = true;
+                        alpha = 0.5;
+                        const target = (i % 2 === 0) ? hand1 : hand2;
+                        px = target.x + noise * 5;
+                        py = target.y + noise * 5;
+                        pz = target.z;
+                    }
+                }
+
+                // --- EFECTO DE VIDA (PUSH) ---
+                if (anim.pushEffect > 0) {
+                    // Explosión radial desde el centro
+                    const dist = Math.sqrt(px*px + py*py);
+                    const dirX = px / (dist+0.1);
+                    const dirY = py / (dist+0.1);
+                    
+                    const blast = anim.pushEffect * 50.0 * rnd;
+                    px += dirX * blast;
+                    py += dirY * blast;
+                    pz += blast * 2.0; // Hacia la cámara
+                    
+                    // Brillo intenso
+                    if (visible) alpha = 1.0;
+                }
+
+                // Asignar
+                if (visible) {
+                    pArr[ix] = px;
+                    pArr[ix+1] = py;
+                    pArr[ix+2] = pz;
+                    
+                    // Mezclar color base con blanco según "vida"
+                    const finalC = color.clone().lerp(cWhite, anim.pushEffect);
+                    
+                    cArr[ix] = finalC.r * alpha;
+                    cArr[ix+1] = finalC.g * alpha;
+                    cArr[ix+2] = finalC.b * alpha;
+                } else {
+                    pArr[ix] = 9999;
+                }
+            }
+
+            posAttr.needsUpdate = true;
+            colAttr.needsUpdate = true;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            time += 0.01;
+            
+            updateSpellLogic();
+            updateParticles();
+            
+            // Efecto de latido final
+            if (currentStep === 6) {
+                const scale = 1.0 + Math.sin(time * 4) * 0.02;
+                scene.scale.set(scale, scale, scale);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // --- LÓGICA DEL HECHIZO (STATE MACHINE) ---
+        function updateSpellLogic() {
+            if (!isHandDetected) {
+                instructionEl.innerHTML = "Coloca ambas manos frente a la cámara";
+                return;
+            }
+
+            const dist = hand1.distanceTo(hand2);
+            const dy = (hand1.y + hand2.y) / 2; // Altura promedio
+            let msg = "";
+
+            // STEP 0 -> 1: CARA (Juntar manos)
+            if (currentStep === 0) {
+                msg = "1) Junta las manos para crear la ESENCIA (Cara)";
+                if (dist < 100) {
+                    currentStep = 1;
+                }
+            }
+            
+            // STEP 1 -> 2: OREJAS (Separar arriba)
+            else if (currentStep === 1) {
+                msg = "2) Separa las manos hacia ARRIBA (Orejas)";
+                anim.faceAlpha = Math.min(1, anim.faceAlpha + 0.05);
+                
+                if (dist > 150 && dy > 50) {
+                    currentStep = 2;
+                }
+            }
+
+            // STEP 2 -> 3: CUERPO (Bajar manos)
+            else if (currentStep === 2) {
+                msg = "3) Baja las manos para formar el CUERPO";
+                anim.earsAlpha = Math.min(1, anim.earsAlpha + 0.05);
+                
+                if (dy < -50) {
+                    currentStep = 3;
+                }
+            }
+
+            // STEP 3 -> 4: COLA (Mover una mano al lado)
+            else if (currentStep === 3) {
+                msg = "4) Usa UNA mano para dibujar la COLA";
+                anim.bodyAlpha = Math.min(1, anim.bodyAlpha + 0.05);
+                
+                // Detectar si una mano se aleja mucho del centro en X
+                if (Math.abs(hand1.x) > 200 || Math.abs(hand2.x) > 200) {
+                    currentStep = 4;
+                }
+            }
+
+            // STEP 4 -> 5: BIGOTES (Gesto 3 dedos)
+            else if (currentStep === 4) {
+                msg = "5) Haz gesto de 3 DEDOS con ambas manos (Bigotes)";
+                anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.05);
+                
+                // La cola sigue a la mano más alejada
+                const activeHand = (Math.abs(hand1.x) > Math.abs(hand2.x)) ? hand1 : hand2;
+                anim.tailTip.lerp(activeHand, 0.1);
+
+                // Detectar gesto 3 dedos (Índice, Medio, Anular abiertos; Meñique cerrado)
+                // Simplificado: Si hay 3 dedos levantados en cada mano
+                const countFingers = (fList) => fList.filter(f => f).length;
+                const f1 = countFingers(fingers.left);
+                const f2 = countFingers(fingers.right);
+                
+                if (f1 === 3 && f2 === 3) {
+                    currentStep = 5;
+                }
+            }
+
+            // STEP 5 -> 6: VIDA (Empujón)
+            else if (currentStep === 5) {
+                msg = "6) ¡ACÉRCATE BRUSCAMENTE para darle VIDA!";
+                anim.whiskersAlpha = Math.min(1, anim.whiskersAlpha + 0.05);
+                
+                // Detectar empujón (Aumento rápido de tamaño de mano)
+                // handSize se calcula en onResults
+                const deltaSize = handSize - prevHandSize;
+                
+                // Umbral de velocidad de acercamiento
+                if (deltaSize > 5.0) { // Ajustar sensibilidad
+                    currentStep = 6;
+                }
+            }
+
+            // STEP 6: FINAL
+            else if (currentStep === 6) {
+                msg = "¡MIAU! El Gato Místico vive.";
+                anim.detailsAlpha = Math.min(1, anim.detailsAlpha + 0.05);
+                
+                // Efecto de explosión inicial que se desvanece
+                if (anim.pushEffect < 1.0 && anim.detailsAlpha < 0.5) {
+                    anim.pushEffect += 0.1;
+                } else {
+                    anim.pushEffect = Math.max(0, anim.pushEffect - 0.02);
+                }
+            }
+
+            instructionEl.innerHTML = msg;
+            debugEl.innerHTML = `Paso: ${currentStep} | Dist: ${Math.round(dist)} | Dedos: ${fingers.left.filter(x=>x).length}/${fingers.right.filter(x=>x).length}`;
+            
+            prevHandSize = handSize;
+        }
+
+        // --- MEDIAPIPE HANDS ---
+        function onResults(results) {
+            loadingEl.style.display = 'none';
+            videoContainer.style.display = 'block';
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                isHandDetected = true;
+                
+                // Helper coordenadas
+                const getPos = (landmarks, index) => {
+                    return new THREE.Vector3(
+                        (0.5 - landmarks[index].x) * window.innerWidth,
+                        (0.5 - landmarks[index].y) * window.innerHeight,
+                        0
+                    );
+                };
+
+                // Helper dedos levantados (Punta vs Nudillo)
+                const checkFingers = (lm) => {
+                    // 0: Pulgar, 1: Índice, 2: Medio, 3: Anular, 4: Meñique
+                    // Índices de puntas: 4, 8, 12, 16, 20
+                    // Índices de nudillos base (MCP): 2, 5, 9, 13, 17
+                    // Para pulgar es distinto (x vs x), para otros es y vs y
+                    const open = [];
+                    // Pulgar (eje X aprox)
+                    open.push(Math.abs(lm[4].x - lm[0].x) > Math.abs(lm[3].x - lm[0].x)); 
+                    // Otros (eje Y, invertido en MP, menor es más arriba)
+                    open.push(lm[8].y < lm[6].y);
+                    open.push(lm[12].y < lm[10].y);
+                    open.push(lm[16].y < lm[14].y);
+                    open.push(lm[20].y < lm[18].y);
+                    return open;
+                };
+
+                // Procesar manos
+                let h1L = results.multiHandLandmarks[0];
+                let h2L = (results.multiHandLandmarks.length > 1) ? results.multiHandLandmarks[1] : h1L;
+
+                // Asignar posiciones
+                const p1 = getPos(h1L, 9); // Centro mano 1
+                const p2 = getPos(h2L, 9); // Centro mano 2
+                
+                // Ordenar izquierda/derecha visualmente
+                if (p1.x < p2.x) {
+                    hand1.lerp(p1, 0.5);
+                    hand2.lerp(p2, 0.5);
+                    fingers.left = checkFingers(h1L);
+                    fingers.right = checkFingers(h2L);
+                } else {
+                    hand1.lerp(p2, 0.5);
+                    hand2.lerp(p1, 0.5);
+                    fingers.left = checkFingers(h2L);
+                    fingers.right = checkFingers(h1L);
+                }
+
+                // Calcular tamaño de mano (para detectar empujón/profundidad relativa)
+                // Distancia entre Muñeca (0) y Medio (12)
+                const size1 = Math.hypot(h1L[0].x - h1L[12].x, h1L[0].y - h1L[12].y);
+                const size2 = Math.hypot(h2L[0].x - h2L[12].x, h2L[0].y - h2L[12].y);
+                // Escalar a píxeles aprox
+                handSize = (size1 + size2) / 2 * window.innerWidth;
+
+            } else {
+                isHandDetected = false;
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        
+        cameraUtils.start();
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        initThree();
+
+    </script>
+</body>
+</html>
