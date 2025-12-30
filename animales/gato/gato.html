@@ -99,6 +99,7 @@
         // --- VARIABLES GLOBALES ---
         let scene, camera, renderer, particles, geometry, material;
         let positions, colors;
+        let catPlane; // Imagen del gato real
         
         // Estado del Gato
         let currentStep = 0; 
@@ -153,6 +154,7 @@
             document.body.appendChild(renderer.domElement);
 
             createParticles();
+            createRealCat();
             window.addEventListener('resize', onWindowResize);
             animate();
         }
@@ -222,6 +224,23 @@
 
             particles = new THREE.Points(geometry, material);
             scene.add(particles);
+        }
+
+        // --- CARGAR IMAGEN REAL ---
+        function createRealCat() {
+            const loader = new THREE.TextureLoader();
+            loader.load('gato.png', (texture) => {
+                const geometry = new THREE.PlaneGeometry(400, 450);
+                const material = new THREE.MeshBasicMaterial({ 
+                    map: texture, 
+                    transparent: true, 
+                    opacity: 0.0,
+                    depthWrite: false
+                });
+                catPlane = new THREE.Mesh(geometry, material);
+                catPlane.position.set(0, 10, 5);
+                scene.add(catPlane);
+            });
         }
 
         // --- LÓGICA DE FORMAS Y ANIMACIÓN ---
@@ -465,9 +484,15 @@
                     // Mezclar color base con blanco según "vida"
                     const finalC = color.clone().lerp(cWhite, anim.pushEffect);
                     
-                    cArr[ix] = finalC.r * alpha;
-                    cArr[ix+1] = finalC.g * alpha;
-                    cArr[ix+2] = finalC.b * alpha;
+                    // Desvanecer partículas si aparece el gato real
+                    let fade = 1.0;
+                    if (catPlane && catPlane.material.opacity > 0) {
+                        fade = 1.0 - catPlane.material.opacity * 0.8;
+                    }
+
+                    cArr[ix] = finalC.r * alpha * fade;
+                    cArr[ix+1] = finalC.g * alpha * fade;
+                    cArr[ix+2] = finalC.b * alpha * fade;
                 } else {
                     pArr[ix] = 9999;
                 }
@@ -575,6 +600,11 @@
                     anim.pushEffect += 0.1;
                 } else {
                     anim.pushEffect = Math.max(0, anim.pushEffect - 0.02);
+                }
+
+                // Aparecer gato real
+                if (catPlane) {
+                    catPlane.material.opacity = Math.min(1, catPlane.material.opacity + 0.01);
                 }
             }
 
