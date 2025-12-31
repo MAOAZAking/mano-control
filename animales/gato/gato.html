@@ -572,7 +572,7 @@
             updateParticles();
             
             // Efecto de latido final
-            if (currentStep === 6) {
+            if (currentStep === 7) {
                 const scale = 1.0 + Math.sin(time * 4) * 0.02;
                 scene.scale.set(scale, scale, scale);
             }
@@ -582,7 +582,7 @@
 
         // --- LÓGICA DEL HECHIZO (STATE MACHINE) ---
         function updateSpellLogic() {
-            if (!isHandDetected && currentStep !== 6) {
+            if (!isHandDetected && currentStep !== 7) {
                 instructionEl.innerHTML = "Coloca ambas manos frente a la cámara";
                 return;
             }
@@ -592,7 +592,7 @@
             let msg = "";
 
             // --- LÓGICA DE DESBLOQUEO (Juntar manos) ---
-            if (!stepReady && currentStep < 6) {
+            if (!stepReady && currentStep < 7) {
                 msg = "🤲 Junta las manos para concentrar energía...";
                 if (dist < 100) {
                     stepReady = true;
@@ -687,40 +687,41 @@
                 }
             }
 
-            // STEP 5 -> 6: VIDA (Empujón)
+            // STEP 5: CONTEMPLACIÓN (Detalles aparecen al juntar manos)
             else if (currentStep === 5) {
                 const delta = Math.abs(handSize - prevHandSize);
+                msg = "6) Mantén las manos QUIETAS para cargar energía...";
+                
+                // Si hay 2 manos y se mueven poco
+                if (handsDetectedCount === 2 && delta < 5.0) {
+                    if (stabilityTimer === 0) stabilityTimer = Date.now();
+                    
+                    const elapsed = Date.now() - stabilityTimer;
+                    const progress = Math.min(10, Math.floor((elapsed / 1400) * 10));
+                    msg += ` [${"|".repeat(progress)}${".".repeat(10 - progress)}]`;
 
-                if (!isPushReady) {
-                    msg = "6) Mantén las manos QUIETAS para cargar energía...";
-                    // Si hay 2 manos y se mueven poco
-                    if (handsDetectedCount === 2 && delta < 5.0) {
-                        if (stabilityTimer === 0) stabilityTimer = Date.now();
-                        
-                        const elapsed = Date.now() - stabilityTimer;
-                        const progress = Math.min(10, Math.floor((elapsed / 1400) * 10));
-                        msg += ` [${"|".repeat(progress)}${".".repeat(10 - progress)}]`;
-
-                        if (elapsed > 1400) {
-                            isPushReady = true;
-                            pushBaseline = handSize;
-                            stabilityTimer = 0;
-                        }
-                    } else {
+                    if (elapsed > 1400) {
+                        currentStep = 6; // Pasar a fase de empujón
+                        pushBaseline = handSize;
                         stabilityTimer = 0;
                     }
                 } else {
-                    msg = "¡AHORA! ¡EMPUJA HACIA LA CÁMARA!";
-                    // Detectar empujón relativo a la base capturada
-                    if (handSize > pushBaseline + 40.0) { 
-                        currentStep = 6;
-                        stepReady = false;
-                    }
+                    stabilityTimer = 0;
                 }
             }
 
-            // STEP 6: FINAL
+            // STEP 6: EMPUJÓN
             else if (currentStep === 6) {
+                msg = "¡AHORA! ¡EMPUJA HACIA LA CÁMARA!";
+                // Detectar empujón relativo a la base capturada
+                if (handSize > pushBaseline + 40.0) { 
+                    currentStep = 7;
+                    stepReady = false;
+                }
+            }
+
+            // STEP 7: FINAL
+            else if (currentStep === 7) {
                 msg = "¡MIAU! formaste todo el gato.";
                 
                 // --- SECUENCIA DE ESTALLIDO DE LUZ ---
@@ -833,7 +834,7 @@
             if (currentStep >= 3) anim.bodyAlpha = Math.min(1, anim.bodyAlpha + 0.05); // Mantener visible después del paso 2
             if (currentStep >= 4) anim.tailAlpha = Math.min(1, anim.tailAlpha + 0.05); // Mantener visible después del paso 3
             if (currentStep >= 5) anim.whiskersAlpha = Math.min(1, anim.whiskersAlpha + 0.05);
-            if (currentStep >= 6) anim.detailsAlpha = Math.min(1, anim.detailsAlpha + 0.05);
+            if (currentStep >= 5) anim.detailsAlpha = Math.min(1, anim.detailsAlpha + 0.05);
 
             instructionEl.innerHTML = msg;
             debugEl.innerHTML = `Paso: ${currentStep} | Listo: ${stepReady ? "SI" : "NO"} | Dist: ${Math.round(dist)}`;
