@@ -138,6 +138,9 @@
         let fingers = { left: [], right: [] }; // Estado de dedos
         let time = 0;
         let stepReady = false; // Controla si se han juntado las manos para el siguiente paso
+        let stabilityTimer = 0;
+        let pushBaseline = 0;
+        let isPushReady = false;
 
         // Elementos DOM
         const loadingEl = document.getElementById('loading');
@@ -579,7 +582,7 @@
 
         // --- LÓGICA DEL HECHIZO (STATE MACHINE) ---
         function updateSpellLogic() {
-            if (!isHandDetected) {
+            if (!isHandDetected && currentStep !== 6) {
                 instructionEl.innerHTML = "Coloca ambas manos frente a la cámara";
                 return;
             }
@@ -679,17 +682,40 @@
                 if (handsDetectedCount === 2 && f1 >= 3 && f2 >= 3) {
                     currentStep = 5;
                     stepReady = false;
+                    isPushReady = false;
+                    stabilityTimer = 0;
                 }
             }
 
             // STEP 5 -> 6: VIDA (Empujón)
             else if (currentStep === 5) {
-                msg = "6) ¡ACÉRCATE BRUSCAMENTE para darle VIDA!";
-                
-                const deltaSize = handSize - prevHandSize;
-                if (deltaSize > 5.0) { 
-                    currentStep = 6;
-                    stepReady = false;
+                const delta = Math.abs(handSize - prevHandSize);
+
+                if (!isPushReady) {
+                    msg = "6) Mantén las manos QUIETAS para cargar energía...";
+                    // Si hay 2 manos y se mueven poco
+                    if (handsDetectedCount === 2 && delta < 5.0) {
+                        if (stabilityTimer === 0) stabilityTimer = Date.now();
+                        
+                        const elapsed = Date.now() - stabilityTimer;
+                        const progress = Math.min(10, Math.floor((elapsed / 1400) * 10));
+                        msg += ` [${"|".repeat(progress)}${".".repeat(10 - progress)}]`;
+
+                        if (elapsed > 1400) {
+                            isPushReady = true;
+                            pushBaseline = handSize;
+                            stabilityTimer = 0;
+                        }
+                    } else {
+                        stabilityTimer = 0;
+                    }
+                } else {
+                    msg = "¡AHORA! ¡EMPUJA HACIA LA CÁMARA!";
+                    // Detectar empujón relativo a la base capturada
+                    if (handSize > pushBaseline + 40.0) { 
+                        currentStep = 6;
+                        stepReady = false;
+                    }
                 }
             }
 
