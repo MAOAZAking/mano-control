@@ -639,6 +639,48 @@
                 anim.tailWag = 0;
             }
 
+            // STEP 4 -> 5: BIGOTES (Gesto 3 dedos)
+            else if (currentStep === 4) {
+                msg = "5) Muestra las 2 manos y muestra 3 dedos y estira hacia afuera con los 3 dedos para hacer los bigotes";
+
+                // Detectar gesto 3 dedos
+                const countFingers = (fList) => fList.filter(f => f).length;
+                const f1 = countFingers(fingers.left);
+                const f2 = countFingers(fingers.right);
+                
+                // Relajamos la condición: Al menos 3 dedos en cada mano (y que haya 2 manos)
+                if (handsDetectedCount === 2 && f1 >= 3 && f2 >= 3) {
+                    currentStep = 5;
+                }
+            }
+
+            // STEP 5 -> 6: VIDA (Empujón)
+            else if (currentStep === 5) {
+                msg = "6) ¡ACÉRCATE BRUSCAMENTE para darle VIDA!";
+                
+                const deltaSize = handSize - prevHandSize;
+                if (deltaSize > 5.0) { 
+                    currentStep = 6;
+                }
+            }
+
+            // STEP 6: FINAL
+            else if (currentStep === 6) {
+                msg = "¡MIAU! formaste todo el gato.";
+                
+                // Efecto de explosión inicial
+                if (anim.pushEffect < 1.0 && anim.detailsAlpha < 0.5) {
+                    anim.pushEffect += 0.1;
+                } else {
+                    anim.pushEffect = Math.max(0, anim.pushEffect - 0.05);
+                }
+
+                // Aparecer gato real
+                if (catPlane) {
+                    catPlane.material.opacity = Math.min(1, catPlane.material.opacity + 0.05);
+                }
+            }
+
             // --- LÓGICA DE COLA (Post-Formación) ---
             if (currentStep >= 4) {
                 // Base de la cola (aproximada según bodyY y bodyRadY)
@@ -669,48 +711,6 @@
                 if (!isControllingTail) {
                     // Movimiento aleatorio / libre
                     anim.tailWag = Math.sin(time * 3) * 50;
-                }
-            }
-
-            // STEP 4 -> 5: BIGOTES (Gesto 3 dedos)
-            else if (currentStep === 4) {
-                msg = "5) Muestra las 2 manos y muestra 3 dedos y estira hacia afuera con los 3 dedos para hacer los bigotes";
-
-                // Detectar gesto 3 dedos
-                const countFingers = (fList) => fList.filter(f => f).length;
-                const f1 = countFingers(fingers.left);
-                const f2 = countFingers(fingers.right);
-                
-                // Relajamos la condición: Al menos 3 dedos en cada mano (y que haya 2 manos)
-                if (handsDetectedCount === 2 && f1 >= 3 && f2 >= 3) {
-                    currentStep = 5;
-                }
-            }
-
-            // STEP 5 -> 6: VIDA (Empujón)
-            else if (currentStep === 5) {
-                msg = "6) ¡ACÉRCATE BRUSCAMENTE para darle VIDA!";
-                
-                const deltaSize = handSize - prevHandSize;
-                if (deltaSize > 5.0) { 
-                    currentStep = 6;
-                }
-            }
-
-            // STEP 6: FINAL
-            else if (currentStep === 6) {
-                msg = "¡MIAU! ormaste todo el gato.";
-                
-                // Efecto de explosión inicial
-                if (anim.pushEffect < 1.0 && anim.detailsAlpha < 0.5) {
-                    anim.pushEffect += 0.1;
-                } else {
-                    anim.pushEffect = Math.max(0, anim.pushEffect - 0.05);
-                }
-
-                // Aparecer gato real
-                if (catPlane) {
-                    catPlane.material.opacity = Math.min(1, catPlane.material.opacity + 0.05);
                 }
             }
 
