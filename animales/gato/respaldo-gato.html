@@ -1,0 +1,45 @@
+                anim.tailWag = 0;
+            }
+
+            // STEP 4 -> 5: BIGOTES (Gesto 3 dedos)
+            else if (currentStep === 4) {
+                msg = "5) Muestra las 2 manos y muestra 3 dedos y estira hacia afuera con los 3 dedos para hacer los bigotes";
+                }
+            }
+
+            // --- LÓGICA DE COLA (Post-Formación) ---
+            if (currentStep >= 4) {
+                // Base de la cola (aproximada según bodyY y bodyRadY)
+                const tailBase = new THREE.Vector3(100, -195, 0); // bodyX(30) + offset(70)
+                let isControllingTail = false;
+
+                // Si hay solo 1 mano y solo el dedo índice levantado
+                if (handsDetectedCount === 1) {
+                    // fingers.left es igual a fingers.right cuando hay 1 mano (por lógica de espejo en onResults)
+                    const fList = fingers.left; 
+                    const count = fList.filter(f => f).length;
+                    const isIndexOnly = (count === 1 && fList[1]); // Índice es el índice 1
+
+                    if (isIndexOnly) {
+                        isControllingTail = true;
+                        // La cola sigue al dedo (hand1 es el centro, aproximamos)
+                        const dir = new THREE.Vector3().subVectors(hand1, tailBase);
+                        const len = dir.length();
+                        const maxLen = 300; // Limitación de longitud
+                        if (len > maxLen) dir.normalize().multiplyScalar(maxLen);
+                        
+                        const target = new THREE.Vector3().addVectors(tailBase, dir);
+                        anim.tailTip.lerp(target, 0.1);
+                        anim.tailWag = 0; // No se mueve sola si la controlas
+                    }
+                }
+
+                if (!isControllingTail) {
+                    // Movimiento aleatorio / libre
+                    anim.tailWag = Math.sin(time * 3) * 50;
+                }
+            }
+
+            // --- ACTUALIZACIÓN DE ANIMACIONES (Acumulativo) ---
+            // Esto asegura que las partes anteriores sigan visibles y apareciendo
+            if (currentStep >= 1) anim.faceAlpha = Math.min(1, anim.faceAlpha + 0.05);

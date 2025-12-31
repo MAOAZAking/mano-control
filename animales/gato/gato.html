@@ -99,7 +99,7 @@
         // --- VARIABLES GLOBALES ---
         let scene, camera, renderer, particles, geometry, material;
         let positions, colors;
-        let catPlane; // Imagen del gato real
+        let catPlane, flashMesh; // Imagen del gato real y efecto flash
         
         // Estado del Gato
         let currentStep = 0; 
@@ -122,7 +122,8 @@
             tailTip: new THREE.Vector3(150, -150, 0), // Posición punta de cola
             lifePulse: 0,
             pushEffect: 0, // Efecto de explosión al dar vida
-            tailWag: 0 // Movimiento de la cola
+            tailWag: 0, // Movimiento de la cola
+            explosionPhase: 0 // 0: Nada, 1: Expandir, 2: Cambiar, 3: Disolver
         };
 
         // Datos de manos
@@ -136,6 +137,7 @@
         let isPinchingRight = false;
         let fingers = { left: [], right: [] }; // Estado de dedos
         let time = 0;
+        let stepReady = false; // Controla si se han juntado las manos para el siguiente paso
 
         // Elementos DOM
         const loadingEl = document.getElementById('loading');
@@ -159,6 +161,7 @@
 
             createParticles();
             createRealCat();
+            createFlashEffect();
             window.addEventListener('resize', onWindowResize);
             camera.lookAt(0, 0, 0);
             animate();
@@ -247,6 +250,16 @@
                 catPlane.position.set(0, 10, 5);
                 scene.add(catPlane);
             });
+        }
+
+        // --- CREAR EFECTO FLASH (LUZ) ---
+        function createFlashEffect() {
+            // Un círculo blanco grande que estará frente a la cámara
+            const geometry = new THREE.CircleGeometry(2000, 64);
+            const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthTest: false });
+            flashMesh = new THREE.Mesh(geometry, material);
+            flashMesh.position.set(0, 0, 500); // Muy cerca de la cámara (z=600)
+            scene.add(flashMesh);
         }
 
         // --- LÓGICA DE FORMAS Y ANIMACIÓN ---
@@ -575,14 +588,25 @@
             const dy = (hand1.y + hand2.y) / 2; // Altura promedio
             let msg = "";
 
+            // --- LÓGICA DE DESBLOQUEO (Juntar manos) ---
+            if (!stepReady && currentStep < 6) {
+                msg = "🤲 Junta las manos para concentrar energía...";
+                if (dist < 100) {
+                    stepReady = true;
+                }
+                instructionEl.innerHTML = msg;
+                debugEl.innerHTML = `Esperando unión | Dist: ${Math.round(dist)}`;
+                return;
+            }
+
             // --- GESTIÓN DE ESTADOS ---
 
-            // STEP 0 -> 1: CARA (Juntar manos)
+            // STEP 0 -> 1: CARA (Hacer círculo)
             if (currentStep === 0) {
-                msg = "1) Pellizca con ambas manos (👌) y júntalas (Cara)";
-                // Requiere pellizco y cercanía
-                if (isPinchingLeft && isPinchingRight && dist < 200) {
+                msg = "1) Pellizca y SEPARA las manos para hacer un CÍRCULO (Cara)";
+                if (isPinchingLeft && isPinchingRight && dist > 200) {
                     currentStep = 1;
+                    stepReady = false;
                 }
             }
             
@@ -591,6 +615,7 @@
                 msg = "2) Separa las manos hacia ARRIBA (Orejas)"; 
                 if (dist > 150 && dy > 50) {
                     currentStep = 2;
+                    stepReady = false;
                 }
             }
 
@@ -608,6 +633,7 @@
                     if (dy < -80) {
                         currentStep = 3;
                         anim.bodyAlpha = 1.0; // Asegurar completo
+                        stepReady = false;
                     }
                 }
             }
@@ -629,6 +655,7 @@
                         // Si soltamos el pellizco y ya se dibujó algo, terminamos
                         if (anim.tailAlpha > 0.5) {
                              currentStep = 4;
+                             stepReady = false;
                         }
                     }
                 } else if (handsDetectedCount > 1) {
@@ -651,6 +678,7 @@
                 // Relajamos la condición: Al menos 3 dedos en cada mano (y que haya 2 manos)
                 if (handsDetectedCount === 2 && f1 >= 3 && f2 >= 3) {
                     currentStep = 5;
+                    stepReady = false;
                 }
             }
 
@@ -661,6 +689,7 @@
                 const deltaSize = handSize - prevHandSize;
                 if (deltaSize > 5.0) { 
                     currentStep = 6;
+                    stepReady = false;
                 }
             }
 
@@ -668,16 +697,69 @@
             else if (currentStep === 6) {
                 msg = "¡MIAU! formaste todo el gato.";
                 
-                // Efecto de explosión inicial
-                if (anim.pushEffect < 1.0 && anim.detailsAlpha < 0.5) {
-                    anim.pushEffect += 0.1;
-                } else {
-                    anim.pushEffect = Math.max(0, anim.pushEffect - 0.05);
+                // --- SECUENCIA DE ESTALLIDO DE LUZ ---
+                
+                // FASE 1: Estallido (Expandir luz desde el centro)
+                if (anim.explosionPhase === 0) {
+                    anim.explosionPhase = 1;
+                    flashMesh.scale.set(0, 0, 1);
+                    flashMesh.material.opacity = 1;
+                }
+                
+                if (anim.explosionPhase === 1) {
+                    // Crecer rápido
+                    flashMesh.scale.addScalar(0.15);
+                    if (flashMesh.scale.x > 1.5) { // Ya cubrió la pantalla
+                        anim.explosionPhase = 2;
+                    }
+                }
+                
+                // FASE 2: Cambio de Escena (Oculto tras la luz)
+                else if (anim.explosionPhase === 2) {
+                    renderer.setClearColor(0xffffff); // Fondo blanco
+                    scene.fog.color.setHex(0xffffff);
+                    document.body.style.backgroundColor = "#ffffff";
+                    particles.visible = false; // Desaparecen partículas
+                    if (catPlane) catPlane.material.opacity = 1; // Aparece gato
+                    anim.explosionPhase = 3;
+                }
+                
+                // FASE 3: Disolución (Se va la luz, queda el gato)
+                else if (anim.explosionPhase === 3) {
+                    flashMesh.material.opacity = Math.max(0, flashMesh.material.opacity - 0.03);
+                }
+            }
+
+            // --- LÓGICA DE COLA (Post-Formación) ---
+            if (currentStep >= 4) {
+                // Base de la cola (aproximada según bodyY y bodyRadY)
+                const tailBase = new THREE.Vector3(100, -195, 0); // bodyX(30) + offset(70)
+                let isControllingTail = false;
+
+                // Si hay solo 1 mano y solo el dedo índice levantado
+                if (handsDetectedCount === 1) {
+                    // fingers.left es igual a fingers.right cuando hay 1 mano (por lógica de espejo en onResults)
+                    const fList = fingers.left; 
+                    const count = fList.filter(f => f).length;
+                    const isIndexOnly = (count === 1 && fList[1]); // Índice es el índice 1
+
+                    if (isIndexOnly) {
+                        isControllingTail = true;
+                        // La cola sigue al dedo (hand1 es el centro, aproximamos)
+                        const dir = new THREE.Vector3().subVectors(hand1, tailBase);
+                        const len = dir.length();
+                        const maxLen = 300; // Limitación de longitud
+                        if (len > maxLen) dir.normalize().multiplyScalar(maxLen);
+                        
+                        const target = new THREE.Vector3().addVectors(tailBase, dir);
+                        anim.tailTip.lerp(target, 0.1);
+                        anim.tailWag = 0; // No se mueve sola si la controlas
+                    }
                 }
 
-                // Aparecer gato real
-                if (catPlane) {
-                    catPlane.material.opacity = Math.min(1, catPlane.material.opacity + 0.05);
+                if (!isControllingTail) {
+                    // Movimiento aleatorio / libre
+                    anim.tailWag = Math.sin(time * 3) * 50;
                 }
             }
 
@@ -724,7 +806,7 @@
             if (currentStep >= 6) anim.detailsAlpha = Math.min(1, anim.detailsAlpha + 0.05);
 
             instructionEl.innerHTML = msg;
-            debugEl.innerHTML = `Paso: ${currentStep} | Dist: ${Math.round(dist)} | Dedos: ${fingers.left.filter(x=>x).length}/${fingers.right.filter(x=>x).length}`;
+            debugEl.innerHTML = `Paso: ${currentStep} | Listo: ${stepReady ? "SI" : "NO"} | Dist: ${Math.round(dist)}`;
             
             prevHandSize = handSize;
         }
