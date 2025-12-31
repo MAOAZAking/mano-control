@@ -752,7 +752,11 @@
                 
                 // FASE 3: Disolución (Se va la luz, queda el gato)
                 else if (anim.explosionPhase === 3) {
-                    flashMesh.material.opacity = Math.max(0, flashMesh.material.opacity - 0.03);
+                    flashMesh.material.opacity -= 0.03;
+                    if (flashMesh.material.opacity <= 0) {
+                        flashMesh.material.opacity = 0;
+                        flashMesh.visible = false;
+                    }
                 }
             }
 
