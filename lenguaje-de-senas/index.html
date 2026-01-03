@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Captura de Señas</title>
+    <!-- Librerías de MediaPipe para detección de manos -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f0f0f0; }
+        h1 { color: #333; }
+        .controls { margin: 20px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        input { padding: 8px; font-size: 16px; width: 50px; text-align: center; text-transform: uppercase; }
+        button { padding: 8px 16px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; margin-left: 10px; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        button#downloadBtn { background-color: #28a745; display: none; }
+        #status { margin: 10px 0; font-weight: bold; height: 24px; }
+        #container { position: relative; width: 640px; height: 480px; background: #000; border-radius: 8px; overflow: hidden; }
+        video { display: none; }
+        canvas { width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+    <h1>Entrenamiento de Alfabeto de Señas</h1>
+    
+    <div class="controls">
+        <label for="letterInput">Letra:</label>
+        <input type="text" id="letterInput" maxlength="1" placeholder="A">
+        <button id="teachBtn">Enseñar seña</button>
+        <button id="downloadBtn">Descargar alfabeto.json</button>
+    </div>
+
+    <div id="status">Ingresa una letra y presiona "Enseñar seña"</div>
+
+    <div id="container">
+        <video id="input_video"></video>
+        <canvas id="output_canvas" width="640" height="480"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const teachBtn = document.getElementById('teachBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const letterInput = document.getElementById('letterInput');
+        const statusDiv = document.getElementById('status');
+
+        let hands, camera;
+        let isCapturing = false;
+        let capturedData = []; // Almacena los gestos
+        
+        // Variables para lógica de estabilidad (3 segundos)
+        let lastLandmarks = null;
+        let stableTimeAccumulator = 0;
+        let lastFrameTime = 0;
+        const REQUIRED_STABLE_TIME_MS = 3000; // 3 segundos
+        const MOVEMENT_THRESHOLD = 0.03; // Tolerancia al temblor natural
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
+
+                if (isCapturing) checkStability(landmarks);
+            } else {
+                if (isCapturing) {
+                    statusDiv.innerText = "Muestra tu mano...";
+                    statusDiv.style.color = "black";
+                    resetStability();
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        function checkStability(currentLandmarks) {
+            const currentTime = performance.now();
+            if (!lastLandmarks) {
+                lastLandmarks = currentLandmarks;
+                lastFrameTime = currentTime;
+                return;
+            }
+
+            const deltaTime = currentTime - lastFrameTime;
+            lastFrameTime = currentTime;
+
+            // Calcular movimiento promedio
+            let totalMovement = 0;
+            for (let i = 0; i < currentLandmarks.length; i++) {
+                const dx = currentLandmarks[i].x - lastLandmarks[i].x;
+                const dy = currentLandmarks[i].y - lastLandmarks[i].y;
+                totalMovement += Math.sqrt(dx*dx + dy*dy);
+            }
+            const avgMovement = totalMovement / currentLandmarks.length;
+
+            if (avgMovement < MOVEMENT_THRESHOLD) {
+                stableTimeAccumulator += deltaTime;
+                statusDiv.innerText = `Mantén quieto... ${(stableTimeAccumulator/1000).toFixed(1)}s / 3.0s`;
+                statusDiv.style.color = "orange";
+
+                if (stableTimeAccumulator >= REQUIRED_STABLE_TIME_MS) {
+                    saveGesture(currentLandmarks);
+                }
+            } else {
+                stableTimeAccumulator = 0;
+                statusDiv.innerText = "Mano inestable, intenta no moverla.";
+                statusDiv.style.color = "red";
+            }
+            lastLandmarks = currentLandmarks;
+        }
+
+        function resetStability() {
+            stableTimeAccumulator = 0;
+            lastLandmarks = null;
+        }
+
+        function saveGesture(landmarks) {
+            isCapturing = false;
+            const letter = letterInput.value.toUpperCase();
+            capturedData.push({ letra: letter, landmarks: landmarks });
+            
+            statusDiv.innerText = `¡Gesto guardado para "${letter}"!`;
+            statusDiv.style.color = "green";
+            teachBtn.disabled = false;
+            downloadBtn.style.display = "inline-block";
+            resetStability();
+        }
+
+        teachBtn.addEventListener('click', () => {
+            if (!letterInput.value) { alert("Ingresa una letra"); return; }
+            isCapturing = true;
+            teachBtn.disabled = true;
+            resetStability();
+            
+            if (!camera) {
+                hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+                hands.setOptions({maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
+                hands.onResults(onResults);
+                camera = new Camera(videoElement, {onFrame: async () => { await hands.send({image: videoElement}); }, width: 640, height: 480});
+                camera.start();
+            }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(capturedData, null, 2));
+            const a = document.createElement('a');
+            a.href = dataStr;
+            a.download = "alfabeto.json";
+            a.click();
+        });
+    </script>
+</body>
+</html>

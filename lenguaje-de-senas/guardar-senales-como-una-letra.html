@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Captura de Señas</title>
+    <!-- Librerías de MediaPipe para detección de manos -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f0f0f0; }
+        h1 { color: #333; }
+        .controls { margin: 20px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        input { padding: 8px; font-size: 16px; width: 50px; text-align: center; text-transform: uppercase; }
+        button { padding: 8px 16px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; margin-left: 10px; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        button#downloadBtn { background-color: #28a745; display: none; }
+        #status { margin: 10px 0; font-weight: bold; height: 24px; }
+        #container { position: relative; width: 640px; height: 480px; background: #000; border-radius: 8px; overflow: hidden; }
+        video { display: none; }
+        canvas { width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+    <h1>Entrenamiento de Alfabeto de Señas</h1>
+    
+    <div class="controls">
+        <label for="letterInput">Letra:</label>
+        <input type="text" id="letterInput" maxlength="1" placeholder="A">
+        <button id="selectFileBtn" style="background-color: #ff9800;">📂 Seleccionar alfabeto.json</button>
+        <button id="teachBtn">Enseñar seña</button>
+        <button id="downloadBtn">Descargar alfabeto.json</button>
+    </div>
+
+    <div id="status">Ingresa una letra y presiona "Enseñar seña"</div>
+
+    <div id="container">
+        <video id="input_video"></video>
+        <canvas id="output_canvas" width="640" height="480"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const teachBtn = document.getElementById('teachBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const selectFileBtn = document.getElementById('selectFileBtn');
+        const letterInput = document.getElementById('letterInput');
+        const statusDiv = document.getElementById('status');
+
+        let hands, camera;
+        let fileHandle = null;
+        let isCapturing = false;
+        let capturedData = []; // Almacena los gestos
+        
+        // Variables para lógica de captura (Animación)
+        let recordingState = 'idle'; // 'idle', 'waiting_hand', 'countdown', 'recording'
+        let stateStartTime = 0;
+        let recordedFrames = [];
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
+
+                if (isCapturing) handleCaptureLoop(landmarks);
+            } else {
+                if (isCapturing) {
+                    // Si se pierde la mano durante el proceso, reiniciar
+                    if (recordingState === 'countdown' || recordingState === 'recording') {
+                        statusDiv.innerText = "Mano perdida. Muestra tu mano para reiniciar.";
+                        statusDiv.style.color = "red";
+                        recordingState = 'waiting_hand';
+                        recordedFrames = [];
+                    } else if (recordingState === 'waiting_hand') {
+                        statusDiv.innerText = "Esperando mano...";
+                        statusDiv.style.color = "black";
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        function handleCaptureLoop(landmarks) {
+            const currentTime = performance.now();
+
+            if (recordingState === 'waiting_hand') {
+                recordingState = 'countdown';
+                stateStartTime = currentTime;
+            } 
+            else if (recordingState === 'countdown') {
+                const elapsed = currentTime - stateStartTime;
+                statusDiv.innerText = `Prepárate... ${(1 - elapsed/1000).toFixed(1)}s`;
+                statusDiv.style.color = "orange";
+                
+                if (elapsed >= 1000) { // 1 segundo de espera
+                    recordingState = 'recording';
+                    stateStartTime = currentTime;
+                    recordedFrames = [];
+                }
+            } 
+            else if (recordingState === 'recording') {
+                const elapsed = currentTime - stateStartTime;
+                statusDiv.innerText = `Grabando... ${(3 - elapsed/1000).toFixed(1)}s`;
+                statusDiv.style.color = "red";
+                
+                // Guardar copia de los landmarks actuales
+                recordedFrames.push(landmarks.map(p => ({x: p.x, y: p.y, z: p.z})));
+                
+                if (elapsed >= 3000) { // 3 segundos de grabación
+                    finishRecording();
+                }
+            }
+        }
+
+        async function finishRecording() {
+            isCapturing = false;
+            recordingState = 'idle';
+            const letter = letterInput.value.toUpperCase();
+            
+            // Analizar si hubo movimiento significativo
+            const isDynamic = analyzeMotion(recordedFrames);
+            
+            // Si es dinámico guardamos todo el array, si es estático solo el frame central
+            const dataToSave = isDynamic ? recordedFrames : recordedFrames[Math.floor(recordedFrames.length / 2)];
+            
+            capturedData.push({ letra: letter, landmarks: dataToSave, tipo: isDynamic ? "dinamico" : "estatico" });
+            
+            if (fileHandle) {
+                await writeToFile();
+                statusDiv.innerText = `¡Guardado en archivo para "${letter}"!`;
+                statusDiv.style.color = "green";
+            } else {
+                statusDiv.innerText = `¡Gesto en memoria para "${letter}"! (No olvides descargar)`;
+                statusDiv.style.color = "blue";
+                downloadBtn.style.display = "inline-block";
+            }
+            
+            teachBtn.disabled = false;
+        }
+
+        function analyzeMotion(frames) {
+            if (frames.length < 2) return false;
+            let totalMovement = 0;
+            
+            for (let i = 1; i < frames.length; i++) {
+                const prev = frames[i-1];
+                const curr = frames[i];
+                let frameDiff = 0;
+                for (let j = 0; j < curr.length; j++) {
+                    const dx = curr[j].x - prev[j].x;
+                    const dy = curr[j].y - prev[j].y;
+                    frameDiff += Math.sqrt(dx*dx + dy*dy);
+                }
+                totalMovement += frameDiff / curr.length;
+            }
+            // Umbral empírico: si el movimiento acumulado promedio es alto, es una animación
+            return totalMovement > 0.8; 
+        }
+
+        teachBtn.addEventListener('click', () => {
+            if (!letterInput.value) { alert("Ingresa una letra"); return; }
+            isCapturing = true;
+            recordingState = 'waiting_hand';
+            teachBtn.disabled = true;
+            
+            if (!camera) {
+                hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+                hands.setOptions({maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
+                hands.onResults(onResults);
+                camera = new Camera(videoElement, {onFrame: async () => { await hands.send({image: videoElement}); }, width: 640, height: 480});
+                camera.start();
+            }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(capturedData, null, 2));
+            const a = document.createElement('a');
+            a.href = dataStr;
+            a.download = "alfabeto.json";
+            a.click();
+        });
+
+        // Función para seleccionar y leer el archivo existente
+        selectFileBtn.addEventListener('click', async () => {
+            try {
+                // Solicitar acceso al archivo
+                [fileHandle] = await window.showOpenFilePicker({
+                    types: [{
+                        description: 'JSON File',
+                        accept: {'application/json': ['.json']},
+                    }],
+                });
+                
+                // Leer contenido actual para no perder datos previos
+                const file = await fileHandle.getFile();
+                const text = await file.text();
+                if (text) {
+                    capturedData = JSON.parse(text);
+                    console.log(`Cargados ${capturedData.length} gestos existentes.`);
+                }
+                
+                selectFileBtn.innerText = "✅ Archivo Vinculado";
+                selectFileBtn.disabled = true;
+                selectFileBtn.style.backgroundColor = "#28a745";
+            } catch (err) {
+                console.error(err);
+                alert("No se pudo acceder al archivo. Asegúrate de usar Chrome o Edge en PC.");
+            }
+        });
+
+        async function writeToFile() {
+            if (!fileHandle) return;
+            const writable = await fileHandle.createWritable();
+            await writable.write(JSON.stringify(capturedData, null, 2));
+            await writable.close();
+        }
+    </script>
+</body>
+</html>

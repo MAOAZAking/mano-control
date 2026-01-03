@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrenador Inteligente de Señas</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #1e1e1e; color: white; display: flex; flex-direction: column; align-items: center; min-height: 100vh; margin: 0; }
+        h1 { margin-top: 20px; color: #00d2ff; }
+        
+        .main-container { display: flex; gap: 20px; padding: 20px; width: 90%; max-width: 1200px; }
+        
+        .video-section { flex: 2; position: relative; border-radius: 15px; overflow: hidden; border: 3px solid #333; background: black; }
+        video { display: none; }
+        canvas { width: 100%; height: auto; display: block; }
+        
+        .ui-section { flex: 1; display: flex; flex-direction: column; gap: 15px; }
+        
+        .card { background: #2d2d2d; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        
+        .status-box { text-align: center; }
+        #instruction { font-size: 1.4em; font-weight: bold; margin-bottom: 10px; color: #ffeb3b; }
+        #sub-instruction { color: #aaa; font-size: 0.9em; }
+        
+        .progress-container { margin-top: 10px; background: #444; height: 10px; border-radius: 5px; overflow: hidden; }
+        #progress-bar { height: 100%; background: #00d2ff; width: 0%; transition: width 0.3s; }
+        
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .btn-primary { background-color: #007bff; color: white; }
+        .btn-success { background-color: #28a745; color: white; }
+        .btn-danger { background-color: #dc3545; color: white; }
+        .btn-warning { background-color: #ffc107; color: black; }
+        button:disabled { background-color: #555; cursor: not-allowed; opacity: 0.7; }
+        button:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.1); }
+
+        #prediction-overlay {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.7); padding: 10px 30px; border-radius: 20px;
+            font-size: 2em; font-weight: bold; color: #00ff00; display: none; border: 2px solid #00ff00;
+        }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); gap: 5px; margin-top: 10px; }
+        .stat-item { background: #444; padding: 5px; text-align: center; border-radius: 4px; font-size: 0.8em; }
+        .stat-item.full { background: #28a745; }
+    </style>
+</head>
+<body>
+    <h1>🧠 Entrenador de IA para Señas</h1>
+
+    <div class="main-container">
+        <div class="video-section">
+            <div id="prediction-overlay">?</div>
+            <video id="input_video"></video>
+            <canvas id="output_canvas" width="640" height="480"></canvas>
+        </div>
+
+        <div class="ui-section">
+            <!-- Panel de Estado -->
+            <div class="card status-box">
+                <div id="instruction">Cargando sistema...</div>
+                <div id="sub-instruction">Por favor espera</div>
+                <div class="progress-container">
+                    <div id="progress-bar"></div>
+                </div>
+            </div>
+
+            <!-- Panel de Práctica (Solo visible en modo práctica) -->
+            <div class="card" id="practice-panel" style="display: none;">
+                <h3 style="margin-top:0">¿Acerté?</h3>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-success" onclick="handleFeedback(true)">✅ Correcto</button>
+                    <button class="btn-danger" onclick="handleFeedback(false)">❌ Incorrecto</button>
+                </div>
+            </div>
+
+            <!-- Controles Generales -->
+            <div class="card controls">
+                <button class="btn-warning" id="fileBtn">📂 Cargar/Guardar Cerebro (JSON)</button>
+                <button class="btn-danger" onclick="resetCurrentLetter()" style="background-color: #ff9800;">↺ Borrar Letra Actual</button>
+                <button class="btn-danger" onclick="resetBrain()">🗑️ Reiniciar Todo</button>
+            </div>
+
+            <!-- Estadísticas -->
+            <div class="card">
+                <h4>Progreso del Alfabeto</h4>
+                <div class="stats-grid" id="stats-grid"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuración ---
+        const LETTERS = "ABCDEFGHIJKLMNÑOPQRSTUVWXYZ".split('');
+        const SAMPLES_REQUIRED = 20; // Muestras necesarias para considerar una letra "aprendida"
+        const KNN_K = 3; // Vecinos para el algoritmo KNN
+
+        // --- Estado del Sistema ---
+        let brain = []; // Aquí se guardan todos los datos {label, landmarks, type}
+        let state = 'IDLE'; // IDLE, TRAINING, PRACTICING
+        let currentTarget = 'A';
+        let isRecording = false;
+        let recordedFrames = [];
+        let fileHandle = null;
+
+        // --- Elementos DOM ---
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const instructionEl = document.getElementById('instruction');
+        const subInstructionEl = document.getElementById('sub-instruction');
+        const progressBar = document.getElementById('progress-bar');
+        const practicePanel = document.getElementById('practice-panel');
+        const predictionOverlay = document.getElementById('prediction-overlay');
+        const statsGrid = document.getElementById('stats-grid');
+        const fileBtn = document.getElementById('fileBtn');
+
+        // --- Inicialización MediaPipe ---
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 640, height: 480
+        });
+        camera.start();
+
+        // --- Lógica Principal ---
+
+        function updateLogic() {
+            updateStats();
+            
+            // Decidir qué hacer: 75% Aprender, 25% Practicar (si hay datos)
+            // Pero priorizar aprender si faltan muestras
+            
+            const lettersNeedingTraining = LETTERS.filter(l => getSampleCount(l) < SAMPLES_REQUIRED);
+            const lettersLearned = LETTERS.filter(l => getSampleCount(l) >= SAMPLES_REQUIRED);
+
+            if (lettersNeedingTraining.length > 0) {
+                // Modo Entrenamiento
+                state = 'TRAINING';
+                practicePanel.style.display = 'none';
+                predictionOverlay.style.display = 'none';
+                
+                // Seleccionar la primera letra que necesite entrenamiento
+                currentTarget = lettersNeedingTraining[0];
+                const count = getSampleCount(currentTarget);
+                
+                instructionEl.innerText = `Enséñame la letra: "${currentTarget}"`;
+                subInstructionEl.innerText = `Mantén presionada ESPACIO para grabar (${count}/${SAMPLES_REQUIRED})`;
+                progressBar.style.width = `${(count / SAMPLES_REQUIRED) * 100}%`;
+                progressBar.style.backgroundColor = "#00d2ff";
+            } else {
+                // Modo Práctica (Todo aprendido o mezcla)
+                state = 'PRACTICING';
+                practicePanel.style.display = 'block';
+                
+                // Elegir una letra al azar para pedir al usuario
+                // (En una versión más avanzada, elegiríamos las que más falla)
+                if (!currentTarget || getSampleCount(currentTarget) < SAMPLES_REQUIRED) {
+                     currentTarget = lettersLearned[Math.floor(Math.random() * lettersLearned.length)];
+                }
+                
+                instructionEl.innerText = `¡Examen! Haz la letra: "${currentTarget}"`;
+                subInstructionEl.innerText = "Haz la seña frente a la cámara";
+                progressBar.style.width = "100%";
+                progressBar.style.backgroundColor = "#28a745";
+            }
+        }
+
+        function onResults(results) {
+            // Dibujar
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
+
+                // Lógica de Grabación (Entrenamiento)
+                if (state === 'TRAINING' && isRecording) {
+                    recordedFrames.push(normalizeLandmarks(landmarks));
+                    subInstructionEl.innerText = "🔴 Grabando... Suelta ESPACIO para terminar.";
+                    subInstructionEl.style.color = "#ff4444";
+                }
+
+                // Lógica de Predicción (Práctica)
+                if (state === 'PRACTICING') {
+                    const prediction = predict(landmarks);
+                    predictionOverlay.innerText = prediction;
+                    predictionOverlay.style.display = 'block';
+                    
+                    // Si detecta la letra correcta automáticamente, podríamos dar feedback positivo visual
+                    if (prediction === currentTarget) {
+                        predictionOverlay.style.color = "#00ff00";
+                        predictionOverlay.style.borderColor = "#00ff00";
+                    } else {
+                        predictionOverlay.style.color = "white";
+                        predictionOverlay.style.borderColor = "white";
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        // --- Algoritmo KNN (El Cerebro) ---
+        function predict(currentLandmarks) {
+            if (brain.length === 0) return "?";
+            
+            const normalized = normalizeLandmarks(currentLandmarks);
+            
+            // Calcular distancias a TODAS las muestras en el cerebro
+            const distances = brain.map(sample => {
+                let dist = 0;
+                if (sample.type === 'estatico') {
+                    dist = calculateDistance(normalized, sample.landmarks);
+                } else {
+                    // Para dinámicos, distancia mínima contra cualquier frame (Bag of Poses simplificado)
+                    const frameDists = sample.landmarks.map(f => calculateDistance(normalized, f));
+                    dist = Math.min(...frameDists);
+                }
+                return { label: sample.label, distance: dist };
+            });
+
+            // Ordenar por menor distancia
+            distances.sort((a, b) => a.distance - b.distance);
+
+            // Tomar los K vecinos más cercanos
+            const kNearest = distances.slice(0, KNN_K);
+            
+            // Votación
+            const votes = {};
+            kNearest.forEach(neighbor => {
+                votes[neighbor.label] = (votes[neighbor.label] || 0) + 1;
+            });
+
+            // Ganador
+            return Object.keys(votes).reduce((a, b) => votes[a] > votes[b] ? a : b);
+        }
+
+        // --- Manejo de Entrada (Teclado) ---
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && state === 'TRAINING' && !isRecording) {
+                isRecording = true;
+                recordedFrames = [];
+            }
+        });
+
+        window.addEventListener('keyup', async (e) => {
+            if (e.code === 'Space' && state === 'TRAINING' && isRecording) {
+                isRecording = false;
+                subInstructionEl.style.color = "#aaa";
+                
+                if (recordedFrames.length > 0) {
+                    // Guardar muestra
+                    // Si hay pocos frames o poco movimiento, es estático. Si no, dinámico.
+                    const isDynamic = analyzeMotion(recordedFrames);
+                    const dataToSave = isDynamic ? recordedFrames : recordedFrames[Math.floor(recordedFrames.length/2)]; // Frame central
+                    
+                    brain.push({
+                        label: currentTarget,
+                        landmarks: dataToSave,
+                        type: isDynamic ? 'dinamico' : 'estatico'
+                    });
+
+                    // Guardar automáticamente si hay archivo vinculado
+                    if (fileHandle) await saveToFile();
+                    
+                    updateLogic();
+                }
+            }
+        });
+
+        // --- Feedback del Usuario ---
+        function handleFeedback(isCorrect) {
+            if (isCorrect) {
+                // ¡Bien hecho! Cambiar de letra objetivo
+                const lettersLearned = LETTERS.filter(l => getSampleCount(l) >= SAMPLES_REQUIRED);
+                let next = currentTarget;
+                while (next === currentTarget && lettersLearned.length > 1) {
+                    next = lettersLearned[Math.floor(Math.random() * lettersLearned.length)];
+                }
+                currentTarget = next;
+                updateLogic();
+            } else {
+                // Se equivocó. Borrar algunas muestras viejas de esta letra o forzar re-entrenamiento
+                alert(`Entendido. Parece que necesito practicar más la letra "${currentTarget}". Volvamos a entrenarla.`);
+                // Truco: Reducir artificialmente el conteo para forzar modo entrenamiento
+                // (En una app real, marcaríamos las muestras confusas, aquí simplemente pedimos más datos)
+                state = 'TRAINING'; // Forzar cambio visual inmediato
+                // Eliminar las 3 muestras más antiguas de esta letra para renovar conocimiento
+                let removed = 0;
+                brain = brain.filter(sample => {
+                    if (sample.label === currentTarget && removed < 3) {
+                        removed++;
+                        return false;
+                    }
+                    return true;
+                });
+                updateLogic();
+            }
+        }
+
+        // --- Utilidades Matemáticas ---
+        function normalizeLandmarks(landmarks) {
+            const wrist = landmarks[0];
+            // 1. CENTRADO: Restamos la posición de la muñeca a todos los puntos.
+            // Esto hace que NO IMPORTE la altura o posición en la pantalla (la muñeca siempre será el punto 0,0).
+            const centered = landmarks.map(p => ({ x: p.x - wrist.x, y: p.y - wrist.y, z: p.z - wrist.z }));
+            // 2. ESCALADO: Dividimos por el tamaño de la mano.
+            // Esto hace que NO IMPORTE si la mano está cerca o lejos de la cámara.
+            const size = Math.sqrt(centered[9].x**2 + centered[9].y**2 + centered[9].z**2) || 1;
+            return centered.map(p => ({ x: p.x / size, y: p.y / size, z: p.z / size }));
+        }
+
+        function calculateDistance(lm1, lm2) {
+            let total = 0;
+            for (let i = 0; i < lm1.length; i++) {
+                total += Math.sqrt((lm1[i].x - lm2[i].x)**2 + (lm1[i].y - lm2[i].y)**2 + (lm1[i].z - lm2[i].z)**2);
+            }
+            return total;
+        }
+
+        function analyzeMotion(frames) {
+            if (frames.length < 5) return false; // Muy corto = estático
+            let movement = 0;
+            for (let i = 1; i < frames.length; i++) {
+                movement += calculateDistance(frames[i], frames[i-1]);
+            }
+            return (movement / frames.length) > 0.6; // Umbral de movimiento
+        }
+
+        function getSampleCount(letter) {
+            return brain.filter(s => s.label === letter).length;
+        }
+
+        function updateStats() {
+            statsGrid.innerHTML = '';
+            LETTERS.forEach(l => {
+                const count = getSampleCount(l);
+                const div = document.createElement('div');
+                div.className = `stat-item ${count >= SAMPLES_REQUIRED ? 'full' : ''}`;
+                div.innerText = `${l}\n${count}`;
+                statsGrid.appendChild(div);
+            });
+        }
+
+        // --- Archivos ---
+        fileBtn.addEventListener('click', async () => {
+            try {
+                [fileHandle] = await window.showOpenFilePicker({types: [{description: 'JSON', accept: {'application/json': ['.json']}}]});
+                const file = await fileHandle.getFile();
+                const text = await file.text();
+                brain = JSON.parse(text);
+                fileBtn.innerText = "✅ Cerebro Vinculado";
+                fileBtn.className = "btn-success";
+                updateLogic();
+            } catch (e) { console.error(e); }
+        });
+
+        async function saveToFile() {
+            const writable = await fileHandle.createWritable();
+            await writable.write(JSON.stringify(brain, null, 2));
+            await writable.close();
+        }
+
+        function resetBrain() {
+            if(confirm("¿Borrar todo el conocimiento?")) { brain = []; updateLogic(); }
+        }
+
+        function resetCurrentLetter() {
+            if(confirm(`¿Estás seguro de borrar todo lo aprendido sobre la letra "${currentTarget}"?`)) {
+                brain = brain.filter(sample => sample.label !== currentTarget);
+                if (fileHandle) saveToFile();
+                updateLogic();
+            }
+        }
+
+        // Iniciar
+        updateLogic();
+    </script>
+</body>
+</html>

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detector de Señas</title>
+    <!-- Librerías de MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #222; color: white; }
+        h1 { margin-bottom: 10px; }
+        .controls { margin: 20px; padding: 15px; background: #333; border-radius: 8px; text-align: center; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; }
+        #container { position: relative; width: 640px; height: 480px; background: #000; border-radius: 8px; overflow: hidden; margin-top: 20px; }
+        video { display: none; }
+        canvas { width: 100%; height: 100%; }
+        #prediction { 
+            position: absolute; 
+            top: 10px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            font-size: 48px; 
+            font-weight: bold; 
+            color: #00ff00; 
+            text-shadow: 2px 2px 4px #000;
+            background-color: rgba(0,0,0,0.5);
+            padding: 10px 30px;
+            border-radius: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Traductor de Señas en Tiempo Real</h1>
+    
+    <div class="controls">
+        <p>Paso 1: Carga tu archivo de señas</p>
+        <input type="file" id="fileInput" accept=".json" style="display: none;">
+        <button onclick="document.getElementById('fileInput').click()">📂 Cargar alfabeto.json</button>
+        <div id="fileStatus" style="margin-top: 10px; color: #aaa;">Ningún archivo cargado</div>
+    </div>
+
+    <div id="container">
+        <div id="prediction">?</div>
+        <video id="input_video"></video>
+        <canvas id="output_canvas" width="640" height="480"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const predictionEl = document.getElementById('prediction');
+        const fileInput = document.getElementById('fileInput');
+        const fileStatus = document.getElementById('fileStatus');
+
+        let alphabetData = [];
+        let hands, camera;
+
+        // 1. Cargar y procesar el archivo JSON
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            try {
+                const text = await file.text();
+                const rawData = JSON.parse(text);
+                
+                // Pre-procesar: Normalizar todas las señas guardadas para que la comparación sea rápida
+                alphabetData = rawData.map(item => {
+                    // Detectar automáticamente si es estático o dinámico si falta la propiedad "tipo"
+                    let tipo = item.tipo;
+                    if (!tipo) {
+                        // Si el primer elemento es un array, es una animación (dinámico), si es objeto es estático
+                        tipo = (item.landmarks.length > 0 && Array.isArray(item.landmarks[0])) ? 'dinamico' : 'estatico';
+                    }
+
+                    if (tipo === 'estatico') {
+                        return { letra: item.letra, landmarks: normalizeLandmarks(item.landmarks), tipo: 'estatico' };
+                    } else {
+                        // Para dinámicos, normalizamos cada cuadro
+                        return { letra: item.letra, landmarks: item.landmarks.map(l => normalizeLandmarks(l)), tipo: 'dinamico' };
+                    }
+                });
+
+                fileStatus.innerText = `✅ Cargadas ${alphabetData.length} letras. ¡Haz una seña!`;
+                fileStatus.style.color = "#00ff00";
+                startCamera();
+            } catch (err) {
+                console.error(err);
+                fileStatus.innerText = "❌ Error al leer el archivo JSON. Verifica el formato.";
+                fileStatus.style.color = "red";
+            }
+        });
+
+        // 2. Función de Normalización (Clave para que funcione a cualquier distancia)
+        function normalizeLandmarks(landmarks) {
+            // Usar la muñeca (punto 0) como centro (0,0,0)
+            const wrist = landmarks[0];
+            const centered = landmarks.map(p => ({ x: p.x - wrist.x, y: p.y - wrist.y, z: p.z - wrist.z }));
+            
+            // Escalar basado en el tamaño de la mano (distancia muñeca -> dedo medio)
+            // Esto hace que no importe si la mano está cerca o lejos de la cámara
+            const size = Math.sqrt(centered[9].x**2 + centered[9].y**2 + centered[9].z**2) || 1; // Punto 9 es base del dedo medio
+            
+            return centered.map(p => ({ x: p.x / size, y: p.y / size, z: p.z / size }));
+        }
+
+        // 3. Comparar seña actual con la base de datos
+        function findMatchingLetter(currentLandmarks) {
+            const normalizedCurrent = normalizeLandmarks(currentLandmarks);
+            let minDistance = Infinity;
+            let bestMatch = "?";
+
+            for (const item of alphabetData) {
+                let dist = Infinity;
+
+                if (item.tipo === 'estatico') {
+                    dist = calculateDistance(normalizedCurrent, item.landmarks);
+                } else {
+                    // Para dinámicos, buscamos si la pose actual se parece a ALGÚN cuadro de la animación
+                    // (Enfoque simplificado "Bag of Poses" para tiempo real)
+                    const frameDistances = item.landmarks.map(frame => calculateDistance(normalizedCurrent, frame));
+                    dist = Math.min(...frameDistances);
+                }
+
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestMatch = item.letra;
+                }
+            }
+
+            // Umbral de sensibilidad (ajustar si es muy estricto o muy laxo)
+            return minDistance < 0.6 ? bestMatch : "?";
+        }
+
+        function calculateDistance(lm1, lm2) {
+            let totalDist = 0;
+            for (let i = 0; i < lm1.length; i++) {
+                const dx = lm1[i].x - lm2[i].x;
+                const dy = lm1[i].y - lm2[i].y;
+                const dz = lm1[i].z - lm2[i].z;
+                totalDist += Math.sqrt(dx*dx + dy*dy + dz*dz);
+            }
+            return totalDist;
+        }
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
+
+                if (alphabetData.length > 0) {
+                    const letter = findMatchingLetter(landmarks);
+                    predictionEl.innerText = `Letra: ${letter}`;
+                    predictionEl.style.display = 'block';
+                }
+            } else {
+                predictionEl.style.display = 'none';
+            }
+            canvasCtx.restore();
+        }
+
+        function startCamera() {
+            if (!camera) {
+                hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+                hands.setOptions({maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
+                hands.onResults(onResults);
+                
+                camera = new Camera(videoElement, {
+                    onFrame: async () => { await hands.send({image: videoElement}); },
+                    width: 640,
+                    height: 480
+                });
+                camera.start();
+            }
+        }
+    </script>
+</body>
+</html>
