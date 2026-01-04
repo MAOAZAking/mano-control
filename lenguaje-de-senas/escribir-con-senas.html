@@ -256,8 +256,9 @@
             } else {
                 // No se detecta mano
                 currentCandidate = null;
-                // Si no hay un temporizador activo y la última acción no fue agregar un espacio, inicia el temporizador.
-                if (!noHandTimer && lastRecognizedLetter !== ' ' && recognizedTextElement.innerText.length > 0) {
+                // Si no hay un temporizador activo y la última acción fue reconocer una letra (no un espacio o una corrección),
+                // inicia el temporizador para agregar un espacio.
+                if (!noHandTimer && lastRecognizedLetter && lastRecognizedLetter.trim() !== '') {
                     noHandTimer = setTimeout(() => {
                         recognizedTextElement.innerText += ' ';
                         lastRecognizedLetter = ' '; // Marca que se agregó un espacio para no agregar más.
