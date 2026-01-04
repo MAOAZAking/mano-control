@@ -119,7 +119,7 @@
         let handLandmarker;
         let runningMode = "VIDEO";
         let knownGestures = [];
-        let retrainingData = [];
+        let retrainingData = []; // Almacenará los gestos marcados como incorrectos
 
         // --- Configuración y Estado ---
         const STATIC_HOLD_TIME = 1000; // 1 segundo para confirmar una letra estática
@@ -129,7 +129,7 @@
         let lastRecognizedLetter = '';
         let noHandTimer = null;
         let isCorrecting = false;
-        let lastCapturedLandmarks = null;
+        let lastCapturedLandmarks = null; // Almacena los landmarks del último gesto reconocido
 
         // --- Funciones Principales ---
 
@@ -145,7 +145,6 @@
                     numHands: 1
                 });
                 console.log("HandLandmarker creado.");
-                enableCam();
             } catch(error) {
                 console.error("Error al crear HandLandmarker:", error);
                 alert("No se pudo iniciar el reconocimiento de manos. Revisa la consola para más detalles. Puede que tu navegador o hardware no sea compatible con la aceleración GPU.");
@@ -157,16 +156,14 @@
                 const response = await fetch('cerebro-ia-basico.json');
                 const data = await response.json();
                 knownGestures = data.map(gesture => {
-                    // Simplificación: Para gestos dinámicos, usamos el primer frame del primer ejemplo.
-                    if (gesture.type === 'dinamico' && Array.isArray(gesture.landmarks) && Array.isArray(gesture.landmarks[0])) {
-                        if (gesture.landmarks.length > 0 && gesture.landmarks[0].length > 0) {
-                            // CORRECCIÓN: Usar el array de landmarks del primer frame, no solo el primer landmark.
-                            return { ...gesture, landmarks: gesture.landmarks[0], type: 'estatico' };
-                        }
+                    // Para gestos dinámicos, que son más complejos, usamos el primer cuadro del gesto como una pose estática representativa.
+                    // Esto es una simplificación; un reconocimiento dinámico completo requeriría un enfoque más avanzado.
+                    if (gesture.type === 'dinamico' && Array.isArray(gesture.landmarks) && gesture.landmarks.length > 0 && Array.isArray(gesture.landmarks[0])) {
+                        return { ...gesture, landmarks: gesture.landmarks[0], type: 'estatico' };
                     }
                     return gesture;
-                }).filter(gesture => gesture.landmarks); // Filtra gestos que no tengan landmarks válidos
-                console.log("Cerebro IA cargado y procesado.");
+                }).filter(gesture => gesture.landmarks && gesture.landmarks.length > 0); // Filtra gestos sin datos
+                console.log("Cerebro IA cargado.");
             } catch (error) {
                 console.error("Error al cargar cerebro-ia-basico.json:", error);
                 alert("No se pudo cargar el archivo de gestos. Asegúrate de que 'cerebro-ia-basico.json' esté en la misma carpeta.");
@@ -188,7 +185,7 @@
         };
 
         let lastVideoTime = -1;
-        async function predictWebcam() {
+        const predictWebcam = async () => {
             canvasElement.style.width = video.videoWidth + 'px';
             canvasElement.style.height = video.videoHeight + 'px';
             canvasElement.width = video.videoWidth;
@@ -201,10 +198,12 @@
                 handleResults(results);
             }
             window.requestAnimationFrame(predictWebcam);
-        }
+        };
 
         const handleResults = (results) => {
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            feedbackButtons.style.display = 'none'; // Ocultar botones por defecto
+
             if (results.landmarks && results.landmarks.length > 0) {
                 if (noHandTimer) {
                     clearTimeout(noHandTimer);
@@ -220,20 +219,21 @@
                     if (recognizedLetter !== currentCandidate) {
                         currentCandidate = recognizedLetter;
                         candidateStartTime = Date.now();
-                    } else if (Date.now() - candidateStartTime > STATIC_HOLD_TIME) {
+                    } else if (Date.now() - candidateStartTime > STATIC_HOLD_TIME && currentCandidate !== lastRecognizedLetter) {
                         if (lastRecognizedLetter !== currentCandidate || isCorrecting) {
-                            lastCapturedLandmarks = landmarks; // Guardar landmarks justo antes de añadir la letra
+                            lastCapturedLandmarks = landmarks;
                             addLetterToScreen(currentCandidate);
                         }
-                        candidateStartTime = null; // Reset para no añadir la misma letra repetidamente
                     }
                 }
             } else {
                 // No se detecta mano
-                currentCandidate = null; // Resetea el candidato si la mano desaparece
+                currentCandidate = null;
+                lastRecognizedLetter = ''; // Permite que la siguiente seña sea reconocida inmediatamente
                 if (!noHandTimer && recognizedTextElement.innerText.length > 0 && !recognizedTextElement.innerText.endsWith(' ')) {
                     noHandTimer = setTimeout(() => {
                         addLetterToScreen(' ');
+                        noHandTimer = null;
                     }, NO_HAND_SPACE_TIME);
                 }
             }
@@ -249,6 +249,8 @@
                 z: lm.z - basePoint.z
             }));
 
+            // Evitar división por cero si no hay mano o los landmarks son inválidos
+            if (normalized.length === 0) return [];
             const maxDist = Math.max(...normalized.map(lm => Math.sqrt(lm.x**2 + lm.y**2 + lm.z**2)));
 
             normalized = normalized.map(lm => ({
@@ -292,13 +294,13 @@
 
         const addLetterToScreen = (letter) => {
             messageEl.style.display = 'none';
-            if (isCorrecting) {
-                recognizedTextElement.innerText += letter;
-                isCorrecting = false;
-            } else {
-                recognizedTextElement.innerText += letter;
-            }
+            // Si se está corrigiendo, la letra anterior ya fue borrada.
+            // Simplemente añadimos la nueva.
+            recognizedTextElement.innerText += letter;
+            
+            isCorrecting = false; // Se resetea el estado de corrección
             lastRecognizedLetter = letter;
+            
             feedbackButtons.style.display = 'block';
         };
 
@@ -312,42 +314,45 @@
         };
 
         const saveForRetraining = () => {
-            if (!lastCapturedLandmarks) return;
+            if (!lastCapturedLandmarks || !lastRecognizedLetter || lastRecognizedLetter.trim() === '') return;
 
-            const incorrectLabel = lastRecognizedLetter; 
             retrainingData.push({
-                label: incorrectLabel,
+                label: lastRecognizedLetter, // La letra que se reconoció mal
                 landmarks: lastCapturedLandmarks,
                 type: 'estatico'
             });
-            console.log(`Guardado para reentrenamiento: Letra '${incorrectLabel}'`, lastCapturedLandmarks);
+            console.log(`Guardado para reentrenamiento: Letra '${lastRecognizedLetter}'`, lastCapturedLandmarks);
         };
 
         const downloadJson = (data, filename) => {
             const jsonStr = JSON.stringify(data, null, 2);
             const blob = new Blob([jsonStr], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
+            const a = document.createElement('a'); // Crear un enlace temporal para la descarga
             a.href = url;
             a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+            console.log("Datos de reentrenamiento descargados.");
         };
 
         // --- Event Listeners ---
 
         btnCorrect.addEventListener('click', () => {
             feedbackButtons.style.display = 'none';
+            lastRecognizedLetter = ''; // Permite que se pueda volver a escribir la misma letra
         });
 
         btnIncorrect.addEventListener('click', () => {
             saveForRetraining();
             const currentText = recognizedTextElement.innerText;
-            recognizedTextElement.innerText = currentText.slice(0, -1);
+            if (currentText.length > 0) {
+                recognizedTextElement.innerText = currentText.slice(0, -1);
+            }
             isCorrecting = true;
-            lastRecognizedLetter = ''; // Permite que la misma letra sea detectada de nuevo
+            lastRecognizedLetter = ''; // Permite que la misma letra (o una nueva) sea detectada de nuevo
             feedbackButtons.style.display = 'none';
             messageEl.style.display = 'block';
         });
@@ -355,7 +360,7 @@
         saveDataBtn.addEventListener('click', () => {
             if (retrainingData.length > 0) {
                 downloadJson(retrainingData, 'debe-entrenar-las-letras.json');
-                console.log("Datos de reentrenamiento descargados.");
+                retrainingData = []; // Limpiar los datos después de guardar
             } else {
                 alert("No hay datos incorrectos para guardar.");
             }
@@ -364,9 +369,8 @@
         // --- Inicialización ---
         async function start() {
             // Primero, intenta iniciar la cámara y el reconocedor de manos.
-            await createHandLandmarker();
-            // Luego, carga los gestos conocidos.
             await loadKnownGestures();
+            await createHandLandmarker();
             console.log("Todo listo para empezar.");
         }
         start();
