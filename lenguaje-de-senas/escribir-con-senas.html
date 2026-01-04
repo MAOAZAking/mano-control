@@ -2,6 +2,8 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Escribir con Señas</title>
     <style>
@@ -82,15 +84,33 @@
         button:active {
             transform: scale(0.95);
         }
+        #json-loader {
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            text-align: center;
+            margin-bottom: 20px;
+            background-color: #fff;
+        }
+        #json-file-input {
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
     <h1>Escribir con Lenguaje de Señas</h1>
-    <div id="container">
+
+    <div id="json-loader">
+        <label for="json-file-input">Para comenzar, carga tu archivo <code>cerebro-ia-basico.json</code>:</label>
+        <br>
+        <input type="file" id="json-file-input" accept=".json">
+    </div>
+
+    <div id="container" style="display: none;">
         <video id="video" width="640" height="480" autoplay playsinline></video>
         <canvas id="canvas" width="640" height="480"></canvas>
     </div>
-    <div id="output-container">
+    <div id="output-container" style="display: none;">
         <h2>Texto Reconocido:</h2>
         <p id="recognized-text"></p>
         <div id="feedback-buttons" style="display: none;">
@@ -104,7 +124,7 @@
     </div>
 
     <script type="module">
-        import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@medipe/tasks-vision@0.10.0";
+        import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.10";
 
         const video = document.getElementById('video');
         const canvasElement = document.getElementById('canvas');
@@ -115,27 +135,34 @@
         const btnCorrect = document.getElementById('btn-correct');
         const btnIncorrect = document.getElementById('btn-incorrect');
         const saveDataBtn = document.getElementById('save-data');
+        
+        const jsonFileInput = document.getElementById('json-file-input');
+        const jsonLoaderDiv = document.getElementById('json-loader');
+        const containerDiv = document.getElementById('container');
+        const outputContainerDiv = document.getElementById('output-container');
 
         let handLandmarker;
         let runningMode = "VIDEO";
         let knownGestures = [];
         let retrainingData = []; // Almacenará los gestos marcados como incorrectos
+        const KNN_K = 3; // Usar los 3 vecinos más cercanos para la predicción
 
         // --- Configuración y Estado ---
         const STATIC_HOLD_TIME = 1000; // 1 segundo para confirmar una letra estática
         const NO_HAND_SPACE_TIME = 2000; // 2 segundos sin mano para un espacio
+        const PREDICTION_INTERVAL = 100; // ms, hacer predicción cada 100ms (10 veces por segundo) para no sobrecargar.
+        let lastPredictionTime = 0;
         let currentCandidate = null;
         let candidateStartTime = 0;
         let lastRecognizedLetter = '';
         let noHandTimer = null;
-        let isCorrecting = false;
         let lastCapturedLandmarks = null; // Almacena los landmarks del último gesto reconocido
 
         // --- Funciones Principales ---
 
         const createHandLandmarker = async () => {
             try {
-                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@medipe/tasks-vision@0.10.0/wasm");
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.10/wasm");
                 handLandmarker = await HandLandmarker.createFromOptions(vision, {
                     baseOptions: {
                         modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
@@ -151,22 +178,18 @@
             }
         };
 
-        const loadKnownGestures = async () => {
+        const processGestures = (data) => {
             try {
-                const response = await fetch('cerebro-ia-basico.json');
-                const data = await response.json();
                 knownGestures = data.map(gesture => {
-                    // Para gestos dinámicos, que son más complejos, usamos el primer cuadro del gesto como una pose estática representativa.
-                    // Esto es una simplificación; un reconocimiento dinámico completo requeriría un enfoque más avanzado.
                     if (gesture.type === 'dinamico' && Array.isArray(gesture.landmarks) && gesture.landmarks.length > 0 && Array.isArray(gesture.landmarks[0])) {
                         return { ...gesture, landmarks: gesture.landmarks[0], type: 'estatico' };
                     }
                     return gesture;
-                }).filter(gesture => gesture.landmarks && gesture.landmarks.length > 0); // Filtra gestos sin datos
-                console.log("Cerebro IA cargado.");
+                }).filter(gesture => gesture.landmarks && gesture.landmarks.length > 0);
+                console.log("Cerebro IA cargado y procesado.");
             } catch (error) {
-                console.error("Error al cargar cerebro-ia-basico.json:", error);
-                alert("No se pudo cargar el archivo de gestos. Asegúrate de que 'cerebro-ia-basico.json' esté en la misma carpeta.");
+                console.error("Error al procesar los gestos del archivo:", error);
+                alert("Hubo un problema al procesar los datos de los gestos.");
             }
         };
 
@@ -202,7 +225,6 @@
 
         const handleResults = (results) => {
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            feedbackButtons.style.display = 'none'; // Ocultar botones por defecto
 
             if (results.landmarks && results.landmarks.length > 0) {
                 if (noHandTimer) {
@@ -210,106 +232,115 @@
                     noHandTimer = null;
                 }
                 const landmarks = results.landmarks[0];
-                drawLandmarks(landmarks);
-                const normalizedLandmarks = normalizeLandmarks(landmarks);
-                
-                const recognizedLetter = recognizeGesture(normalizedLandmarks);
+                drawHandResults(results.landmarks); // Dibujar siempre para que se vea fluido.
 
-                if (recognizedLetter) {
-                    if (recognizedLetter !== currentCandidate) {
-                        currentCandidate = recognizedLetter;
-                        candidateStartTime = Date.now();
-                    } else if (Date.now() - candidateStartTime > STATIC_HOLD_TIME && currentCandidate !== lastRecognizedLetter) {
-                        if (lastRecognizedLetter !== currentCandidate || isCorrecting) {
-                            lastCapturedLandmarks = landmarks;
-                            addLetterToScreen(currentCandidate);
+                const now = performance.now();
+                // Solo ejecutar la lógica de reconocimiento pesada cada cierto intervalo.
+                if (now - lastPredictionTime > PREDICTION_INTERVAL) {
+                    lastPredictionTime = now;
+                    const normalizedLandmarks = normalizeLandmarks(landmarks);
+                    const recognizedLetter = knn_predict(normalizedLandmarks);
+
+                    if (recognizedLetter) {
+                        if (recognizedLetter !== currentCandidate) {
+                            currentCandidate = recognizedLetter;
+                            candidateStartTime = Date.now();
+                        } else if (Date.now() - candidateStartTime > STATIC_HOLD_TIME && currentCandidate !== lastRecognizedLetter) {
+                            if (lastRecognizedLetter !== currentCandidate) {
+                                lastCapturedLandmarks = landmarks;
+                                addLetterToScreen(currentCandidate);
+                            }
                         }
                     }
                 }
             } else {
                 // No se detecta mano
                 currentCandidate = null;
-                lastRecognizedLetter = ''; // Permite que la siguiente seña sea reconocida inmediatamente
-                if (!noHandTimer && recognizedTextElement.innerText.length > 0 && !recognizedTextElement.innerText.endsWith(' ')) {
+                // Si no hay un temporizador activo y la última acción no fue agregar un espacio, inicia el temporizador.
+                if (!noHandTimer && lastRecognizedLetter !== ' ' && recognizedTextElement.innerText.length > 0) {
                     noHandTimer = setTimeout(() => {
-                        addLetterToScreen(' ');
+                        recognizedTextElement.innerText += ' ';
+                        lastRecognizedLetter = ' '; // Marca que se agregó un espacio para no agregar más.
                         noHandTimer = null;
-                    }, NO_HAND_SPACE_TIME);
+                    }, NO_HAND_SPACE_TIME); 
                 }
             }
         };
 
         // --- Funciones de Utilidad ---
 
-        const normalizeLandmarks = (landmarks) => {
-            const basePoint = landmarks[0];
-            let normalized = landmarks.map(lm => ({
-                x: lm.x - basePoint.x,
-                y: lm.y - basePoint.y,
-                z: lm.z - basePoint.z
-            }));
+        function normalizeLandmarks(landmarks) {
+            const wrist = landmarks[0];
+            // 1. Centrar en la muñeca.
+            const centered = landmarks.map(p => ({ x: p.x - wrist.x, y: p.y - wrist.y, z: p.z - wrist.z }));
+            // 2. Escalar por el tamaño de la mano (distancia de la muñeca al dedo medio).
+            const size = Math.sqrt(centered[9].x**2 + centered[9].y**2 + centered[9].z**2) || 1;
+            return centered.map(p => ({ x: p.x / size, y: p.y / size, z: p.z / size }));
+        }
 
-            // Evitar división por cero si no hay mano o los landmarks son inválidos
-            if (normalized.length === 0) return [];
-            const maxDist = Math.max(...normalized.map(lm => Math.sqrt(lm.x**2 + lm.y**2 + lm.z**2)));
-
-            normalized = normalized.map(lm => ({
-                x: lm.x / maxDist,
-                y: lm.y / maxDist,
-                z: lm.z / maxDist
-            }));
-            
-            return normalized;
-        };
-
-        const calculateTotalDistance = (landmarks1, landmarks2) => {
+        function calculateDistance(lm1, lm2) {
             let totalDistance = 0;
-            if (!landmarks1 || !landmarks2 || landmarks1.length !== landmarks2.length) {
+            if (!lm1 || !lm2 || lm1.length !== lm2.length) {
                 return Infinity;
             }
-            for (let i = 0; i < landmarks1.length; i++) {
-                totalDistance += Math.sqrt(
-                    (landmarks1[i].x - landmarks2[i].x)**2 +
-                    (landmarks1[i].y - landmarks2[i].y)**2 +
-                    (landmarks1[i].z - landmarks2[i].z)**2
+            for (let i = 0; i < lm1.length; i++) {
+                totalDistance += Math.sqrt( // Distancia euclidiana entre cada punto
+                    (lm1[i].x - lm2[i].x)**2 +
+                    (lm1[i].y - lm2[i].y)**2 +
+                    (lm1[i].z - lm2[i].z)**2
                 );
             }
             return totalDistance;
-        };
+        }
 
-        const recognizeGesture = (liveLandmarks) => {
-            let minDistance = Infinity;
-            let recognizedGesture = null;
+        function knn_predict(currentLandmarks) {
+            if (knownGestures.length === 0) return "?";
 
-            for (const gesture of knownGestures) {
-                const distance = calculateTotalDistance(liveLandmarks, gesture.landmarks);
-                if (distance < minDistance) {
-                    minDistance = distance;
-                    recognizedGesture = gesture.label;
+            // Calcular distancias a todas las muestras en la base de datos
+            const distances = knownGestures.map(sample => {
+                return { label: sample.label, distance: calculateDistance(currentLandmarks, sample.landmarks) };
+            });
+
+            // Ordenar por la menor distancia
+            distances.sort((a, b) => a.distance - b.distance);
+
+            // Tomar los K vecinos más cercanos
+            const kNearest = distances.slice(0, KNN_K);
+            
+            // Contar los votos de los vecinos
+            const votes = {};
+            kNearest.forEach(neighbor => {
+                votes[neighbor.label] = (votes[neighbor.label] || 0) + 1;
+            });
+
+            // Devolver el gesto con más votos
+            let bestGuess = null;
+            let maxVotes = 0;
+            for (const label in votes) {
+                if (votes[label] > maxVotes) {
+                    maxVotes = votes[label];
+                    bestGuess = label;
                 }
             }
-            // Umbral de confianza: si la seña es muy diferente a todo lo conocido, no la reconozcas.
-            return minDistance < 0.8 ? recognizedGesture : null; 
-        };
+            return bestGuess;
+        }
 
         const addLetterToScreen = (letter) => {
             messageEl.style.display = 'none';
-            // Si se está corrigiendo, la letra anterior ya fue borrada.
-            // Simplemente añadimos la nueva.
+            feedbackButtons.style.display = 'none'; // Oculta los botones de la letra anterior para mostrar los nuevos.
+
             recognizedTextElement.innerText += letter;
-            
-            isCorrecting = false; // Se resetea el estado de corrección
-            lastRecognizedLetter = letter;
-            
-            feedbackButtons.style.display = 'block';
+            lastRecognizedLetter = letter; // Actualiza la última letra reconocida.
+
+            feedbackButtons.style.display = 'block'; // Muestra los botones de feedback para la nueva letra.
         };
 
-        const drawLandmarks = (landmarks) => {
-            for (const landmark of landmarks) {
-                canvasCtx.beginPath();
-                canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 5, 0, 2 * Math.PI);
-                canvasCtx.fillStyle = '#FF0000';
-                canvasCtx.fill();
+        const drawHandResults = (handLandmarks) => {
+            for (const landmarks of handLandmarks) {
+                // Usar las utilidades de dibujo de MediaPipe
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS,
+                               {color: '#00FF00', lineWidth: 5});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2, radius: 5});
             }
         };
 
@@ -342,16 +373,16 @@
 
         btnCorrect.addEventListener('click', () => {
             feedbackButtons.style.display = 'none';
-            lastRecognizedLetter = ''; // Permite que se pueda volver a escribir la misma letra
+            // Permite que la misma letra pueda ser reconocida de nuevo inmediatamente.
+            lastRecognizedLetter = ''; 
         });
 
         btnIncorrect.addEventListener('click', () => {
             saveForRetraining();
             const currentText = recognizedTextElement.innerText;
             if (currentText.length > 0) {
-                recognizedTextElement.innerText = currentText.slice(0, -1);
+                recognizedTextElement.innerText = currentText.slice(0, -1); // Borra la última letra.
             }
-            isCorrecting = true;
             lastRecognizedLetter = ''; // Permite que la misma letra (o una nueva) sea detectada de nuevo
             feedbackButtons.style.display = 'none';
             messageEl.style.display = 'block';
@@ -367,13 +398,35 @@
         });
 
         // --- Inicialización ---
-        async function start() {
-            // Primero, intenta iniciar la cámara y el reconocedor de manos.
-            await loadKnownGestures();
-            await createHandLandmarker();
-            console.log("Todo listo para empezar.");
-        }
-        start();
+        jsonFileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) {
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    processGestures(data); // Process the loaded data
+
+                    // Hide loader and show the main app UI
+                    jsonLoaderDiv.style.display = 'none';
+                    containerDiv.style.display = 'block';
+                    outputContainerDiv.style.display = 'block';
+
+                    // Now, initialize the camera and hand landmarker
+                    await createHandLandmarker();
+                    enableCam();
+                    console.log("Todo listo para empezar. Activando cámara...");
+
+                } catch (error) {
+                    console.error("Error al leer o parsear el archivo JSON:", error);
+                    alert("El archivo seleccionado no es un JSON válido o no se pudo leer.");
+                }
+            };
+            reader.readAsText(file);
+        });
 
     </script>
 </body>
